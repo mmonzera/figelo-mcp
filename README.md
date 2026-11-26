@@ -163,6 +163,23 @@ Depending on what your custom connector supports:
   { "type": "call", "id": "req-1", "tool": "get_selection", "args": {} }
   ```
 
+### Use Cases & Edge Cases (Troubleshooting)
+
+- **Multi-Client Simultaneously**: Open **1 Hub + 1 Figma plugin** and connect Claude Code, Codex, Antigravity, Cursor, and a Custom Connector at the same time — no `4001: Replaced by new mcp` eviction.
+- **Claude Code vs. Claude Desktop (`+ → Plugins` menu)**:
+  - `claude mcp add ...` writes to `~/.claude.json` (used by Claude Code CLI and the Code tab). It **will not** appear inside Claude Desktop's `+ → Plugins` menu even when `claude mcp list` already shows `figelo ... √ Connected` — just ask Claude directly in the Code tab or CLI.
+  - To also use FigeloMCP in Claude Desktop's regular **Chat** tab, add the `stdio` config to `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS) and fully **Quit** + reopen Claude Desktop.
+- **Custom Connector not showing tools in an active chat**:
+  - Verify the HTTP URL ends with `/mcp` (`http://localhost:3870/mcp`), not `/mc`.
+  - Start a **new chat session** (or restart the active agent session) so newly added MCP tools are loaded.
+  - Some clients require explicitly mentioning the connector (e.g., `@figelo-mcp`) or enabling it in the workspace/connector toggle.
+- **Sharing a `figma.com/design/...` link**:
+  - FigeloMCP interacts with the document currently **open in Figma Desktop** where the FigeloMCP plugin is running (it does not fetch files from the Figma cloud URL). Open the target file in Figma Desktop and keep the plugin window open.
+- **Windows PowerShell `ExecutionPolicy` error (`npm.ps1 cannot be loaded`)**:
+  - Run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once in PowerShell (no admin needed), or use `npm.cmd link` / `node dist/cli.js start -d`.
+- **Figma Manifest `allowedDomains` validation**:
+  - Figma Desktop rejects IP literals like `ws://127.0.0.1:3870` in `manifest.json` (`must be a valid URL`). Always use `ws://localhost:3870–3875` in `plugin/manifest.json`.
+
 ---
 
 <a id="bahasa-indonesia"></a>
@@ -275,6 +292,23 @@ Pilih sesuai tipe koneksi yang didukung custom connector Anda:
   - Daftar tool & schema: `GET http://127.0.0.1:3870/api/tools`
   - Jalankan tool: `POST http://127.0.0.1:3870/api/call` dengan body `{ "tool": "get_selection", "args": {} }`
 - **WebSocket langsung:** `ws://127.0.0.1:3870` (`client_hello` lalu `call`)
+
+### Use Case & Edge Case (Troubleshooting)
+
+- **Banyak AI App Sekaligus**: Cukup **1 Hub + 1 plugin Figma**, lalu hubungkan Claude Code, Codex, Antigravity, Cursor, dan Custom Connector secara bersamaan tanpa saling memutus koneksi (`4001: Replaced by new mcp`).
+- **Claude Code vs. Claude Desktop (menu `+ → Plugins`)**:
+  - Perintah `claude mcp add ...` menyimpan config ke `~/.claude.json` (dipakai oleh Claude Code CLI & tab Code). Server ini **memang tidak muncul** di menu `+ → Plugins` Claude Desktop meskipun `claude mcp list` sudah menunjukkan `figelo ... √ Connected` — Anda bisa langsung menyuruh Claude memanggil `figelo` di chat/CLI.
+  - Jika ingin muncul juga di tab **Chat** biasa pada Claude Desktop, tambahkan config `stdio` ke `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` di Windows atau `~/Library/Application Support/Claude/claude_desktop_config.json` di macOS), lalu **Quit** penuh Claude Desktop dari system tray dan buka ulang.
+- **Custom Connector belum terbaca di sesi chat yang sedang berjalan**:
+  - Pastikan URL HTTP berakhiran `/mcp` (`http://localhost:3870/mcp`), bukan `/mc`.
+  - Mulai **sesi chat baru** / restart sesi agent agar daftar tool MCP yang baru dimuat ulang.
+  - Pada beberapa client, plugin/connector perlu dipanggil dengan `@figelo-mcp` atau diaktifkan lewat toggle connector terlebih dahulu.
+- **Mengirim link `figma.com/design/...`**:
+  - FigeloMCP bekerja langsung pada dokumen yang **sedang terbuka di Figma Desktop** dengan plugin FigeloMCP aktif (bukan mengunduh file dari cloud URL). Pastikan file-nya dibuka di Figma Desktop dan jendela plugin tetap terbuka.
+- **Error PowerShell `ExecutionPolicy` di Windows (`npm.ps1 cannot be loaded`)**:
+  - Jalankan `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` sekali saja (tanpa Admin), atau gunakan `npm.cmd link` / `node dist/cli.js start -d`.
+- **Error `allowedDomains` saat import plugin di Figma**:
+  - Figma Desktop menolak alamat IP (`ws://127.0.0.1:3870`) di `manifest.json`. Gunakan `ws://localhost:3870–3875`.
 
 ---
 
