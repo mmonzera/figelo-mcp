@@ -12,13 +12,7 @@
       "ws://localhost:3872",
       "ws://localhost:3873",
       "ws://localhost:3874",
-      "ws://localhost:3875",
-      "ws://127.0.0.1:3870",
-      "ws://127.0.0.1:3871",
-      "ws://127.0.0.1:3872",
-      "ws://127.0.0.1:3873",
-      "ws://127.0.0.1:3874",
-      "ws://127.0.0.1:3875"
+      "ws://localhost:3875"
     ],
     "reasoning": "Connects Figma Desktop to the local FigeloMCP multi-client Hub daemon"
   }
