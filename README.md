@@ -1,51 +1,62 @@
 # FigeloMCP
 
-**One Figma plugin. One local Hub. Connect Antigravity, Claude Code, Codex, Cursor, t3code, and your own harnesses (like Atelier) to Figma simultaneously — with zero connection contention.**
+**One Figma plugin. One local Hub. Connect Claude Code, Codex, Antigravity, Cursor, and any Custom Connector to Figma simultaneously — with zero connection contention.**
 
-Most Figma MCP bridges spawn a separate relay inside each IDE and evict existing connections (`4001: Replaced by new mcp`) whenever a second app connects. **FigeloMCP** fixes this at the architecture level with a unified Hub daemon and unicast request routing.
+[English](#english) | [Bahasa Indonesia](#bahasa-indonesia)
 
 ---
 
-## Architecture
+<a id="english"></a>
+
+## English
+
+Most Figma MCP bridges spawn a separate relay inside each IDE and evict existing connections (`4001: Replaced by new mcp`) whenever a second app connects. **FigeloMCP** fixes this at the architecture level with a unified Hub daemon and unicast request routing.
+
+### Architecture
 
 ```text
-Antigravity  ──┐
-Claude Code  ──┼── Streamable HTTP (/mcp) ──┐
-Codex        ──┘                            │
-                                            ▼
-Atelier      ──── REST (/api/call) ────▶ [ FigeloMCP Hub (:3870) ] ◀──WS──▶ [ FigeloMCP Figma Plugin ]
-                                            ▲                                  (Serial Task Queue)
-t3code / CLI ──── WS or Stdio Bridge ───────┘
+Claude Code      ──┐
+Codex            ──┼── Streamable HTTP (/mcp) ──┐
+Antigravity      ──┤                            │
+Cursor           ──┘                            ▼
+                                         [ FigeloMCP Hub (:3870) ] ◀──WS──▶ [ FigeloMCP Figma Plugin ]
+Custom Connector ── REST (/api/call) ───────────▲                              (Serial Task Queue)
+                 └─ WS / Stdio Bridge ──────────┘
 ```
 
-### Why it never fights over connections
-- **Single Shared Hub Daemon**: Runs independently on `127.0.0.1:3870` (fallback `3870–3875`). Closing one IDE never disconnects your other apps or Figma.
+#### Why it never fights over connections
+- **Single Shared Hub Daemon**: Runs independently on `127.0.0.1:3870` (fallback `3870–3875`). Closing one app never disconnects your other apps or Figma.
 - **Zero Evictions**: Every MCP client gets its own isolated `McpServer` session sharing one `PluginBroker`.
 - **Unicast Routing**: Each `requestId` is tracked back to its exact caller — no broadcast leaks across apps.
 - **Multi-Document Support**: Open multiple Figma files at once; target any document via its `channel` (use `list_figma_documents`).
-- **Serial Sandbox Queue**: Inside Figma, mutations execute sequentially in an async queue so concurrent writes from 5+ AI agents never corrupt nodes.
+- **Serial Sandbox Queue**: Inside Figma, mutations execute sequentially in an async queue so concurrent writes from multiple AI agents never corrupt nodes.
 - **Cross-Platform**: Works out of the box on **macOS** (`LaunchAgents`) and **Windows** (`Startup` silent launcher).
 
 ---
 
-## Quick Start (macOS & Windows)
+### Quick Start (Windows & macOS)
 
-### 1. Install & Build
+#### 1. Install & Build
 
 ```bash
-git clone <your-figelo-mcp-repo-url> FigeloMCP
+git clone https://github.com/mmonzera/figelo-mcp.git FigeloMCP
 cd FigeloMCP
 npm install
 npm run build
 ```
 
-*(Optional)* Link globally so `figelo-mcp` works anywhere on your machine:
+Link globally so `figelo-mcp` works anywhere on your machine:
 
 ```bash
 npm link
 ```
 
-### 2. Start the Hub (Once)
+> **Windows PowerShell note:** If `npm link` or `figelo-mcp` fails with `running scripts is disabled on this system`, run this once in PowerShell (no admin required):
+> ```powershell
+> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+> ```
+
+#### 2. Start the Hub
 
 Start in background right now:
 
@@ -53,7 +64,7 @@ Start in background right now:
 figelo-mcp start -d
 ```
 
-Or install auto-start on login (macOS LaunchAgent / Windows silent Startup script):
+Or register auto-start on login (macOS LaunchAgent / Windows Startup):
 
 ```bash
 figelo-mcp install-service
@@ -65,90 +76,205 @@ Check status anytime:
 figelo-mcp status
 ```
 
-### 3. Load the Plugin in Figma Desktop
+#### 3. Load the Plugin in Figma Desktop
 
 1. Open **Figma Desktop** → **Plugins** → **Development** → **Import plugin from manifest...**
 2. Select `FigeloMCP/plugin/manifest.json`
 3. Run **Plugins → Development → FigeloMCP**
 
-The plugin automatically finds the Hub on `3870–3875` and displays connected AI clients in real time.
+Keep the plugin window open while working. It automatically connects to the Hub on `localhost:3870–3875` and shows **Connected** along with active AI clients.
 
 ---
 
-## Connecting Your Apps & Harnesses
+### Connecting Your Apps & Custom Connectors
 
-Run `figelo-mcp setup` anytime to print these configs.
+All apps below can connect **at the same time** to the same Hub. Run `figelo-mcp setup` anytime to print quick snippets.
 
-### Option 1: Streamable HTTP MCP (Recommended — zero extra processes)
+#### 1. Claude Code
 
-Works with any client supporting Streamable HTTP MCP (`Claude Code`, `Antigravity`, `Cursor`, `Codex`, etc.):
+```bash
+claude mcp add --scope user --transport http figelo http://localhost:3870/mcp
+```
+
+*(Omit `--scope user` if you only want it in the current project.)*
+
+#### 2. Codex (OpenAI Codex CLI)
+
+```bash
+codex mcp add figelo --url http://localhost:3870/mcp
+```
+
+Or add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.figelo]
+url = "http://localhost:3870/mcp"
+```
+
+#### 3. Antigravity, Cursor, and JSON `mcpServers` Clients
+
+Add to your app's MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "figelo": {
-      "url": "http://127.0.0.1:3870/mcp"
+      "url": "http://localhost:3870/mcp"
     }
   }
 }
 ```
 
-### Option 2: Stdio MCP (For clients that only support `command` + `args`)
+#### 4. Custom Connector
 
-If a client doesn't support HTTP MCP yet, use stdio mode. It automatically detects (or detached-spawns) the shared Hub and forwards calls over HTTP so it still never fights other apps:
+Depending on what your custom connector supports:
+
+- **Streamable HTTP MCP (Recommended):**
+  - Connection type: **HTTP** (Streamable HTTP URL)
+  - Server name: `figelo-mcp`
+  - Endpoint URL: `http://localhost:3870/mcp`
+- **Stdio MCP (Local command):**
+  - Command: `figelo-mcp`
+  - Args: `["stdio"]`
+  *(Or without `npm link`: `"command": "node"`, `"args": ["/absolute/path/to/FigeloMCP/dist/cli.js", "stdio"]`)*
+- **REST API:**
+  - Discover all tool schemas: `GET http://127.0.0.1:3870/api/tools`
+  - Execute any tool: `POST http://127.0.0.1:3870/api/call`
+    ```ts
+    const res = await fetch('http://127.0.0.1:3870/api/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'create_frame',
+        args: {
+          name: 'Card',
+          width: 360,
+          height: 220,
+          fillHex: '#FFFFFF',
+          cornerRadius: 16
+        }
+      })
+    });
+    const data = await res.json();
+    ```
+- **Direct WebSocket (`ws://127.0.0.1:3870`):**
+  ```json
+  { "type": "client_hello", "clientName": "custom-client" }
+  { "type": "call", "id": "req-1", "tool": "get_selection", "args": {} }
+  ```
+
+---
+
+<a id="bahasa-indonesia"></a>
+
+## Bahasa Indonesia
+
+**Satu plugin Figma. Satu Hub lokal. Hubungkan Claude Code, Codex, Antigravity, Cursor, maupun Custom Connector ke Figma secara bersamaan — tanpa saling memutus koneksi.**
+
+Kebanyakan bridge MCP Figma menjalankan relay terpisah di tiap aplikasi dan memutus koneksi yang sudah ada (`4001: Replaced by new mcp`) saat aplikasi kedua terhubung. **FigeloMCP** menyelesaikan masalah ini dengan satu Hub daemon bersama dan routing request unicast.
+
+### Cara Instalasi & Setup (Windows & macOS)
+
+#### 1. Clone, Build, dan Link
+
+```bash
+git clone https://github.com/mmonzera/figelo-mcp.git FigeloMCP
+cd FigeloMCP
+npm install
+npm run build
+npm link
+```
+
+> **Catatan Windows PowerShell:** Jika `npm link` atau `figelo-mcp` gagal dengan error `running scripts is disabled on this system`, jalankan perintah ini sekali saja di PowerShell (tidak perlu Run as Administrator):
+> ```powershell
+> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+> ```
+
+#### 2. Jalankan FigeloMCP Hub
+
+Jalankan Hub di background sekarang:
+
+```bash
+figelo-mcp start -d
+```
+
+*(Opsional)* Daftarkan auto-start agar Hub otomatis menyala setiap login Windows / macOS:
+
+```bash
+figelo-mcp install-service
+```
+
+Cek status Hub kapan saja:
+
+```bash
+figelo-mcp status
+```
+
+#### 3. Pasang Plugin di Figma Desktop
+
+1. Buka **Figma Desktop** → **Plugins** → **Development** → **Import plugin from manifest...**
+2. Pilih file `FigeloMCP/plugin/manifest.json`
+3. Jalankan **Plugins → Development → FigeloMCP**
+
+Biarkan jendela plugin **FigeloMCP** tetap terbuka selama bekerja. Statusnya akan berubah menjadi **Connected** di port `:3870`.
+
+---
+
+### Cara Menghubungkan ke Claude Code, Codex, Antigravity, atau Custom Connector
+
+Semua aplikasi berikut bisa terhubung **bersamaan** ke satu Hub dan satu plugin Figma yang sama:
+
+#### 1. Claude Code
+
+```bash
+claude mcp add --scope user --transport http figelo http://localhost:3870/mcp
+```
+
+*(Hapus `--scope user` jika hanya ingin dipasang di project saat ini.)*
+
+#### 2. Codex (OpenAI Codex CLI)
+
+```bash
+codex mcp add figelo --url http://localhost:3870/mcp
+```
+
+Atau tambahkan ke `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.figelo]
+url = "http://localhost:3870/mcp"
+```
+
+#### 3. Antigravity, Cursor, dan Client MCP JSON
+
+Tambahkan ke konfigurasi `mcpServers` di aplikasi Anda:
 
 ```json
 {
   "mcpServers": {
     "figelo": {
-      "command": "figelo-mcp",
-      "args": ["stdio"]
+      "url": "http://localhost:3870/mcp"
     }
   }
 }
 ```
 
-*(Or without `npm link`: `"command": "node"`, `"args": ["/absolute/path/to/FigeloMCP/dist/cli.js", "stdio"]`)*
+#### 4. Custom Connector
 
-### Option 3: Custom Harnesses (Atelier, t3code, scripts)
+Pilih sesuai tipe koneksi yang didukung custom connector Anda:
 
-#### REST API (Simplest for custom agent harnesses)
-
-- **Discover all tool schemas**: `GET http://127.0.0.1:3870/api/tools`
-- **Execute any tool**: `POST http://127.0.0.1:3870/api/call`
-
-```ts
-const res = await fetch('http://127.0.0.1:3870/api/call', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    tool: 'create_frame',
-    args: {
-      name: 'Atelier Card',
-      width: 360,
-      height: 220,
-      fillHex: '#FFFFFF',
-      cornerRadius: 16,
-      layoutMode: 'VERTICAL',
-      itemSpacing: 12,
-      paddingTop: 16,
-      paddingRight: 16,
-      paddingBottom: 16,
-      paddingLeft: 16
-    }
-  })
-});
-const data = await res.json();
-```
-
-#### Direct WebSocket
-
-Connect to `ws://127.0.0.1:3870`:
-
-```json
-{ "type": "client_hello", "clientName": "atelier" }
-{ "type": "call", "id": "req-1", "tool": "get_selection", "args": {} }
-```
+- **HTTP (Streamable HTTP MCP — Direkomendasikan):**
+  - Connection: **HTTP** (Streamable HTTP URL)
+  - Server name: `figelo-mcp`
+  - Endpoint URL: `http://localhost:3870/mcp`
+- **Local Command (Stdio MCP):**
+  - Command: `figelo-mcp`
+  - Args: `["stdio"]`
+  *(Atau tanpa `npm link`: command `node` dengan args `["/path/ke/FigeloMCP/dist/cli.js", "stdio"]`)*
+- **REST API:**
+  - Daftar tool & schema: `GET http://127.0.0.1:3870/api/tools`
+  - Jalankan tool: `POST http://127.0.0.1:3870/api/call` dengan body `{ "tool": "get_selection", "args": {} }`
+- **WebSocket langsung:** `ws://127.0.0.1:3870` (`client_hello` lalu `call`)
 
 ---
 
@@ -159,8 +285,6 @@ Connect to `ws://127.0.0.1:3870`:
 - **Create**: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`, `create_svg`, `create_component`, `create_instance`
 - **Modify & Export**: `update_node`, `set_auto_layout`, `delete_nodes`, `export_image`
 - **Full Escape Hatch**: `execute_figma_js` (run arbitrary async Figma Plugin API scripts)
-
----
 
 ## CLI Commands
 
@@ -173,8 +297,6 @@ Connect to `ws://127.0.0.1:3870`:
 | `figelo-mcp install-service` | Auto-start Hub on login (macOS LaunchAgent / Windows Startup) |
 | `figelo-mcp uninstall-service` | Remove auto-start registration |
 | `figelo-mcp setup` | Print ready-to-paste config snippets |
-
----
 
 ## Development
 
