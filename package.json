@@ -1,0 +1,54 @@
+{
+  "name": "figelo-mcp",
+  "version": "0.1.0",
+  "description": "Multi-client Figma MCP Hub + Plugin — connect Claude Code, Antigravity, Codex, Cursor, t3code, and custom harnesses like Atelier simultaneously without connection contention.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "figelo-mcp": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "plugin/manifest.json",
+    "plugin/dist/"
+  ],
+  "scripts": {
+    "build:server": "tsup src/cli.ts src/index.ts --format esm --dts --clean --out-dir dist --target node20",
+    "build:plugin": "node plugin/build.mjs",
+    "build": "npm run build:server && npm run build:plugin",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.plugin.json",
+    "test": "vitest run",
+    "start:hub": "node dist/cli.js start"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.109.0",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.25.0",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "keywords": [
+    "figma",
+    "mcp",
+    "model-context-protocol",
+    "multi-client",
+    "claude-code",
+    "codex",
+    "antigravity",
+    "atelier"
+  ]
+}

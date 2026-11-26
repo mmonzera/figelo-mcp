@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FigeloMCP</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #f5f6f8;
+      --border: #e4e6eb;
+      --text: #181a1f;
+      --muted: #667085;
+      --accent: #0d99ff;
+      --success: #14ae5c;
+      --warn: #f59e0b;
+      --error: #f24822;
+      --code-bg: #f0f2f5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1e1f24;
+        --surface: #282a31;
+        --border: #383b45;
+        --text: #f3f4f6;
+        --muted: #9ca3af;
+        --accent: #38a6ff;
+        --success: #22c55e;
+        --warn: #fbbf24;
+        --error: #fb5c3c;
+        --code-bg: #141519;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      font-size: 12px;
+      color: var(--text);
+      background: var(--bg);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 100vh;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--error);
+    }
+    .badge.connected .dot { background: var(--success); }
+    .badge.connecting .dot { background: var(--warn); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--muted);
+    }
+    .stat-val {
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    input.input {
+      flex: 1;
+      height: 30px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      padding: 0 8px;
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      min-width: 0;
+    }
+    button.btn {
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button.btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+    .endpoint {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10px;
+    }
+    .endpoint span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .log-box {
+      flex: 1;
+      min-height: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .log-clear {
+      border: none;
+      background: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .log-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+    .log-item { margin-bottom: 3px; }
+    .log-item.ok { color: var(--success); }
+    .log-item.err { color: var(--error); }
+    .log-item.info { color: var(--muted); }
+    .hint {
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="brand-title">FigeloMCP</div>
+    </div>
+    <button id="status-btn" class="badge disconnected" type="button">
+      <span class="dot"></span>
+      <span id="status-label">Offline</span>
+    </button>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div class="stat-label">Hub Port</div>
+        <div id="stat-port" class="stat-val">--</div>
+      </div>
+      <div>
+        <div class="stat-label">Connected AI Apps</div>
+        <div id="stat-clients" class="stat-val">0</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="stat-label" style="margin-bottom:4px;">Document Channel</div>
+      <div class="row">
+        <input id="channel-input" class="input" type="text" value="figma-doc" />
+        <button id="channel-save" class="btn primary" type="button">Apply</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="stat-label" style="margin-bottom:4px;">MCP Endpoint (All Apps)</div>
+      <div class="endpoint">
+        <span id="mcp-url">http://127.0.0.1:3870/mcp</span>
+        <button id="copy-mcp" class="btn" style="height:22px;padding:0 7px;font-size:10px;" type="button">Copy</button>
+      </div>
+    </div>
+    <div id="hub-hint" class="hint">
+      Start Hub once: <code>npx figelo-mcp start -d</code> (or configure stdio in any AI IDE).
+    </div>
+  </div>
+
+  <div class="log-box">
+    <div class="log-header">
+      <span>Live Activity</span>
+      <button id="log-clear" class="log-clear" type="button">Clear</button>
+    </div>
+    <div id="log-list" class="log-list"></div>
+  </div>
+
+  <script>
+    const PORTS = [3870, 3871, 3872, 3873, 3874, 3875];
+    const HOSTS = ['127.0.0.1', 'localhost'];
+
+    let ws = null;
+    let connected = false;
+    let reconnectAttempt = 0;
+    let reconnectTimer = null;
+    let docInfo = {
+      channel: 'figma-doc',
+      documentName: 'Untitled',
+      fileKey: null,
+      currentPage: 'Page 1',
+      pluginVersion: '0.1.0',
+    };
+
+    const statusBtn = document.getElementById('status-btn');
+    const statusLabel = document.getElementById('status-label');
+    const statPort = document.getElementById('stat-port');
+    const statClients = document.getElementById('stat-clients');
+    const channelInput = document.getElementById('channel-input');
+    const channelSaveBtn = document.getElementById('channel-save');
+    const mcpUrlEl = document.getElementById('mcp-url');
+    const copyMcpBtn = document.getElementById('copy-mcp');
+    const logList = document.getElementById('log-list');
+    const logClearBtn = document.getElementById('log-clear');
+    const hubHint = document.getElementById('hub-hint');
+
+    function addLog(text, cls) {
+      const div = document.createElement('div');
+      div.className = 'log-item ' + (cls || 'info');
+      const time = new Date().toLocaleTimeString();
+      div.textContent = '[' + time + '] ' + text;
+      logList.appendChild(div);
+      logList.scrollTop = logList.scrollHeight;
+      while (logList.children.length > 150) {
+        logList.removeChild(logList.firstChild);
+      }
+    }
+
+    function setStatus(state, label) {
+      statusBtn.className = 'badge ' + state;
+      statusLabel.textContent = label;
+    }
+
+    function sendHello() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'plugin_hello',
+        channel: docInfo.channel,
+        documentName: docInfo.documentName,
+        fileKey: docInfo.fileKey,
+        currentPage: docInfo.currentPage,
+        pluginVersion: docInfo.pluginVersion,
+      }));
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 15000);
+      reconnectAttempt++;
+      reconnectTimer = setTimeout(function() {
+        reconnectTimer = null;
+        connect(true);
+      }, delay);
+    }
+
+    function connect(silent) {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+        ws = null;
+      }
+
+      setStatus('connecting', 'Scanning...');
+      if (!silent) addLog('Scanning FigeloMCP Hub on ports 3870–3875...', 'info');
+
+      const targets = [];
+      HOSTS.forEach(function(h) {
+        PORTS.forEach(function(p) {
+          targets.push({ host: h, port: p });
+        });
+      });
+
+      let settled = false;
+      let failCount = 0;
+      const sockets = [];
+
+      const timeout = setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        sockets.forEach(function(s) { s.onopen = null; s.onerror = null; s.close(); });
+        setStatus('disconnected', 'Hub Offline');
+        if (!silent) addLog('Hub unreachable. Start with: figelo-mcp start -d', 'err');
+        scheduleReconnect();
+      }, 1500);
+
+      targets.forEach(function(target) {
+        let sock;
+        try {
+          sock = new WebSocket('ws://' + target.host + ':' + target.port);
+        } catch (e) {
+          failCount++;
+          return;
+        }
+        sockets.push(sock);
+
+        sock.onopen = function() {
+          if (settled) {
+            sock.close();
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          sockets.forEach(function(s) {
+            if (s !== sock) {
+              s.onopen = null;
+              s.onerror = null;
+              s.close();
+            }
+          });
+
+          ws = sock;
+          connected = true;
+          reconnectAttempt = 0;
+          setStatus('connected', 'Connected');
+          statPort.textContent = ':' + target.port;
+          mcpUrlEl.textContent = 'http://' + target.host + ':' + target.port + '/mcp';
+          hubHint.textContent = 'Ready — multiple AI apps & harnesses can connect simultaneously.';
+          addLog('Connected to Hub at ' + target.host + ':' + target.port + ' (channel: ' + docInfo.channel + ')', 'ok');
+          sendHello();
+
+          ws.onmessage = function(ev) {
+            let msg;
+            try { msg = JSON.parse(ev.data); } catch (e) { return; }
+
+            if (msg.type === 'ping') {
+              ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+              return;
+            }
+            if (msg.type === 'hub_status') {
+              statClients.textContent = String(msg.activeClients || 0);
+              return;
+            }
+            if (msg.type === 'request') {
+              addLog('<- ' + msg.method, 'info');
+              parent.postMessage({ pluginMessage: msg }, '*');
+            }
+          };
+
+          ws.onclose = function() {
+            connected = false;
+            ws = null;
+            statPort.textContent = '--';
+            statClients.textContent = '0';
+            setStatus('disconnected', 'Reconnecting...');
+            addLog('Disconnected from Hub, retrying...', 'err');
+            scheduleReconnect();
+          };
+
+          ws.onerror = function() {};
+        };
+
+        sock.onerror = function() {
+          failCount++;
+          if (!settled && failCount >= targets.length) {
+            settled = true;
+            clearTimeout(timeout);
+            setStatus('disconnected', 'Hub Offline');
+            if (!silent) addLog('Hub unreachable. Start with: figelo-mcp start -d', 'err');
+            scheduleReconnect();
+          }
+        };
+      });
+    }
+
+    window.onmessage = function(event) {
+      const msg = event.data && event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === 'init_doc') {
+        docInfo = {
+          channel: msg.channel || 'figma-doc',
+          documentName: msg.documentName || 'Untitled',
+          fileKey: msg.fileKey || null,
+          currentPage: msg.currentPage || 'Page 1',
+          pluginVersion: msg.pluginVersion || '0.1.0',
+        };
+        channelInput.value = docInfo.channel;
+        connect(false);
+        return;
+      }
+
+      if (msg.type === 'response' || msg.type === 'error') {
+        addLog(
+          msg.type === 'error' ? '-> ERR: ' + (msg.error && msg.error.message) : '-> OK',
+          msg.type === 'error' ? 'err' : 'ok',
+        );
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+    };
+
+    statusBtn.addEventListener('click', function() {
+      if (connected && ws) {
+        ws.close();
+      } else {
+        connect(false);
+      }
+    });
+
+    channelSaveBtn.addEventListener('click', function() {
+      const next = channelInput.value.trim();
+      if (!next) return;
+      docInfo.channel = next;
+      parent.postMessage({ pluginMessage: { type: 'save_channel', channel: next } }, '*');
+      sendHello();
+      addLog('Channel updated -> ' + next, 'ok');
+    });
+
+    copyMcpBtn.addEventListener('click', function() {
+      const url = mcpUrlEl.textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function() {
+          copyMcpBtn.textContent = 'Copied!';
+          setTimeout(function() { copyMcpBtn.textContent = 'Copy'; }, 1200);
+        });
+      }
+    });
+
+    logClearBtn.addEventListener('click', function() {
+      logList.innerHTML = '';
+    });
+  </script>
+</body>
+</html>
