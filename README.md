@@ -88,9 +88,28 @@ Keep the plugin window open while working. It automatically connects to the Hub 
 
 ### Connecting Your Apps & Custom Connectors
 
+#### Option A: One-Command Auto-Connect (Recommended)
+
+Automatically detect and configure all supported desktop & CLI apps installed on your machine (**Claude Desktop**, **Claude Code**, **Codex**, **Antigravity**, and **Cursor**):
+
+```bash
+figelo-mcp connect
+```
+
+Or connect/disconnect a specific target (`all`, `claude-desktop`, `claude-code`, `codex`, `antigravity`, `cursor`):
+
+```bash
+figelo-mcp connect claude-desktop
+figelo-mcp disconnect claude-desktop
+```
+
+> **Windows Claude Desktop note:** On Windows (MSIX v6+), Claude Desktop stores its config under `%LOCALAPPDATA%\Claude-Data\<package>\claude_desktop_config.json`, which `figelo-mcp connect` detects automatically. Because **System tray** keeps Claude running in the background, **right-click the Claude icon in the Windows System Tray → Quit**, then reopen Claude Desktop so it loads `figelo`.
+
+#### Option B: Manual / Custom Connectors
+
 All apps below can connect **at the same time** to the same Hub. Run `figelo-mcp setup` anytime to print quick snippets.
 
-#### 1. Claude Code
+##### 1. Claude Code
 
 ```bash
 claude mcp add --scope user --transport http figelo http://localhost:3870/mcp
@@ -168,7 +187,7 @@ Depending on what your custom connector supports:
 - **Multi-Client Simultaneously**: Open **1 Hub + 1 Figma plugin** and connect Claude Code, Codex, Antigravity, Cursor, and a Custom Connector at the same time — no `4001: Replaced by new mcp` eviction.
 - **Claude Code vs. Claude Desktop (`+ → Plugins` menu)**:
   - `claude mcp add ...` writes to `~/.claude.json` (used by Claude Code CLI and the Code tab). It **will not** appear inside Claude Desktop's `+ → Plugins` menu even when `claude mcp list` already shows `figelo ... √ Connected` — just ask Claude directly in the Code tab or CLI.
-  - To also use FigeloMCP in Claude Desktop's regular **Chat** tab, add the `stdio` config to `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows, `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS) and fully **Quit** + reopen Claude Desktop.
+  - To use FigeloMCP in Claude Desktop's **Chat** tab, run `figelo-mcp connect claude-desktop` (or `figelo-mcp connect`). It automatically finds `%LOCALAPPDATA%\Claude-Data\<package>\claude_desktop_config.json` (Windows MSIX) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) and configures the `stdio` bridge safely without overwriting your preferences. Remember to **Quit from the System Tray** (Windows) / **Cmd+Q** (macOS) and reopen Claude Desktop.
 - **Custom Connector not showing tools in an active chat**:
   - Verify the HTTP URL ends with `/mcp` (`http://localhost:3870/mcp`), not `/mc`.
   - Start a **new chat session** (or restart the active agent session) so newly added MCP tools are loaded.
@@ -237,11 +256,30 @@ Biarkan jendela plugin **FigeloMCP** tetap terbuka selama bekerja. Statusnya aka
 
 ---
 
-### Cara Menghubungkan ke Claude Code, Codex, Antigravity, atau Custom Connector
+### Cara Menghubungkan ke Claude Desktop, Claude Code, Codex, Antigravity, atau Custom Connector
+
+#### Opsi A: Auto-Connect 1 Perintah (Direkomendasikan)
+
+Deteksi dan pasang FigeloMCP secara otomatis ke semua aplikasi yang terpasang di komputer Anda (**Claude Desktop**, **Claude Code**, **Codex**, **Antigravity**, dan **Cursor**):
+
+```bash
+figelo-mcp connect
+```
+
+Atau pilih satu target saja (`all`, `claude-desktop`, `claude-code`, `codex`, `antigravity`, `cursor`):
+
+```bash
+figelo-mcp connect claude-desktop
+figelo-mcp disconnect claude-desktop
+```
+
+> **Catatan Claude Desktop di Windows:** Pada versi MSIX v6+, Claude Desktop menyimpan konfigurasinya di `%LOCALAPPDATA%\Claude-Data\<package>\claude_desktop_config.json` (otomatis terdeteksi oleh `figelo-mcp connect`). Karena **System tray** membuat Claude tetap jalan di background saat jendela ditutup, **klik kanan ikon Claude di Windows System Tray → Quit**, lalu buka ulang Claude Desktop agar `figelo` termuat.
+
+#### Opsi B: Manual / Custom Connector
 
 Semua aplikasi berikut bisa terhubung **bersamaan** ke satu Hub dan satu plugin Figma yang sama:
 
-#### 1. Claude Code
+##### 1. Claude Code
 
 ```bash
 claude mcp add --scope user --transport http figelo http://localhost:3870/mcp
@@ -298,7 +336,7 @@ Pilih sesuai tipe koneksi yang didukung custom connector Anda:
 - **Banyak AI App Sekaligus**: Cukup **1 Hub + 1 plugin Figma**, lalu hubungkan Claude Code, Codex, Antigravity, Cursor, dan Custom Connector secara bersamaan tanpa saling memutus koneksi (`4001: Replaced by new mcp`).
 - **Claude Code vs. Claude Desktop (menu `+ → Plugins`)**:
   - Perintah `claude mcp add ...` menyimpan config ke `~/.claude.json` (dipakai oleh Claude Code CLI & tab Code). Server ini **memang tidak muncul** di menu `+ → Plugins` Claude Desktop meskipun `claude mcp list` sudah menunjukkan `figelo ... √ Connected` — Anda bisa langsung menyuruh Claude memanggil `figelo` di chat/CLI.
-  - Jika ingin muncul juga di tab **Chat** biasa pada Claude Desktop, tambahkan config `stdio` ke `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` di Windows atau `~/Library/Application Support/Claude/claude_desktop_config.json` di macOS), lalu **Quit** penuh Claude Desktop dari system tray dan buka ulang.
+  - Untuk memakai FigeloMCP di tab **Chat** Claude Desktop, jalankan `figelo-mcp connect claude-desktop` (atau `figelo-mcp connect`). Perintah ini otomatis mendeteksi `%LOCALAPPDATA%\Claude-Data\<package>\claude_desktop_config.json` (Windows MSIX) atau `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) dan menambahkan bridge `stdio` tanpa menghapus preferences Anda. Jangan lupa **Quit dari System Tray** (Windows) / **Cmd+Q** (macOS) lalu buka ulang Claude Desktop.
 - **Custom Connector belum terbaca di sesi chat yang sedang berjalan**:
   - Pastikan URL HTTP berakhiran `/mcp` (`http://localhost:3870/mcp`), bukan `/mc`.
   - Mulai **sesi chat baru** / restart sesi agent agar daftar tool MCP yang baru dimuat ulang.
@@ -327,6 +365,8 @@ Pilih sesuai tipe koneksi yang didukung custom connector Anda:
 | `figelo-mcp start [-d]` | Start the unified Hub (`-d` runs detached in background) |
 | `figelo-mcp stop` | Stop the running Hub daemon |
 | `figelo-mcp status` | Print Hub health, connected Figma docs, and active clients |
+| `figelo-mcp connect [target]` | Auto-configure MCP in installed apps (`all`, `claude-desktop`, `claude-code`, `codex`, `antigravity`, `cursor`) |
+| `figelo-mcp disconnect [target]` | Remove FigeloMCP config from installed apps |
 | `figelo-mcp stdio` | Run stdio MCP bridge connected to the shared Hub |
 | `figelo-mcp install-service` | Auto-start Hub on login (macOS LaunchAgent / Windows Startup) |
 | `figelo-mcp uninstall-service` | Remove auto-start registration |

@@ -8,6 +8,13 @@ import {
 } from './client/ensure-hub.js';
 import { startStdioBridge } from './client/hub-client.js';
 import { installService, uninstallService } from './service/autostart.js';
+import {
+  CONNECTOR_TARGETS,
+  connectApps,
+  disconnectApps,
+  type ConnectorActionResult,
+  type ConnectorTarget,
+} from './service/connectors.js';
 import { DEFAULT_HOST, DEFAULT_PORT, FIGELO_VERSION } from './shared/protocol.js';
 
 function parseFlag(args: string[], flag: string): string | undefined {
@@ -30,10 +37,14 @@ function printSetupGuide(host: string, port: number): void {
    figelo-mcp start -d
    figelo-mcp install-service
 
-2) Streamable HTTP MCP (Recommended — zero extra processes, connect all apps at once):
+2) Auto-connect all detected AI apps (Claude Desktop, Claude Code, Codex, Antigravity, Cursor):
+   figelo-mcp connect
+   (Or target one app: figelo-mcp connect claude-desktop)
+
+3) Streamable HTTP MCP (for custom connectors or manual config):
    URL: ${mcpUrl}
 
-   Claude Code / Codex / Cursor / Antigravity (HTTP MCP):
+   JSON mcpServers snippet:
    {
      "mcpServers": {
        "figelo": {
@@ -42,23 +53,58 @@ function printSetupGuide(host: string, port: number): void {
      }
    }
 
-3) Stdio MCP Fallback (for clients that only accept command/args — auto-spawns & shares Hub):
+4) Stdio MCP Fallback (for clients that only accept command/args — auto-spawns & shares Hub):
    {
      "mcpServers": {
        "figelo": {
-         "command": "npx",
-         "args": ["-y", "figelo-mcp"]
+         "command": "figelo-mcp",
+         "args": ["stdio"]
        }
      }
    }
 
-4) Custom Harness Integration (Atelier, t3code, scripts):
+5) Custom Connector Integration (REST & WebSocket):
    - REST Discovery: GET  http://${host}:${port}/api/tools
    - REST Tool Call: POST ${apiUrl}
      Body: { "tool": "create_frame", "args": { "name": "Card", "width": 320, "height": 200 } }
    - WebSocket Call: ${wsUrl}
      Send: { "type": "call", "id": "req-1", "tool": "get_selection", "args": {} }
 `);
+}
+
+function printConnectorResults(results: ConnectorActionResult[]): void {
+  let anyError = false;
+  let needsClaudeDesktopRestart = false;
+
+  for (const res of results) {
+    const tag = res.status.toUpperCase().padEnd(12);
+    console.log(`[${tag}] ${res.label} -> ${res.configPath}`);
+    console.log(`               ${res.message}`);
+    if (res.status === 'error') anyError = true;
+    if (res.status === 'connected' && res.target === 'claude-desktop') {
+      needsClaudeDesktopRestart = true;
+    }
+  }
+
+  if (needsClaudeDesktopRestart) {
+    const trayHint =
+      process.platform === 'win32'
+        ? 'Quit Claude Desktop from the Windows System Tray (bottom-right icon -> Quit) and reopen it.'
+        : 'Fully Quit Claude Desktop (Cmd+Q) and reopen it.';
+    console.log(`\nNote for Claude Desktop: ${trayHint}`);
+  }
+
+  if (anyError) {
+    process.exitCode = 1;
+  }
+}
+
+function parseConnectorTargetArg(raw: string | undefined): ConnectorTarget | 'all' | null {
+  if (!raw || raw.startsWith('-') || raw === 'all') return 'all';
+  if ((CONNECTOR_TARGETS as readonly string[]).includes(raw)) {
+    return raw as ConnectorTarget;
+  }
+  return null;
 }
 
 function printHelp(): void {
@@ -75,9 +121,12 @@ Commands:
     --host <host>     Host to bind (default: ${DEFAULT_HOST})
   stop                Stop running Hub daemon
   status              Show Hub health, connected Figma documents, and active clients
+  connect [target]    Auto-configure MCP in installed AI apps (default: all)
+                      Targets: all, ${CONNECTOR_TARGETS.join(', ')}
+  disconnect [target] Remove FigeloMCP config from AI apps (default: all)
   install-service     Register Hub to auto-start on login (macOS LaunchAgent / Windows Startup)
   uninstall-service   Remove auto-start registration
-  setup               Print copy-paste configs for Claude Code, Antigravity, Codex, Atelier, t3code
+  setup               Print copy-paste configs for Claude, Codex, Antigravity, Cursor, Custom Connectors
   help                Show this help message
 `);
 }
@@ -187,6 +236,30 @@ async function main(): Promise<void> {
 
     case 'setup': {
       printSetupGuide(host, port);
+      return;
+    }
+
+    case 'connect': {
+      const target = parseConnectorTargetArg(args[1]);
+      if (!target) {
+        console.error(
+          `Unknown target "${args[1]}". Valid targets: all, ${CONNECTOR_TARGETS.join(', ')}`,
+        );
+        process.exit(1);
+      }
+      printConnectorResults(connectApps(target, { port, host }));
+      return;
+    }
+
+    case 'disconnect': {
+      const target = parseConnectorTargetArg(args[1]);
+      if (!target) {
+        console.error(
+          `Unknown target "${args[1]}". Valid targets: all, ${CONNECTOR_TARGETS.join(', ')}`,
+        );
+        process.exit(1);
+      }
+      printConnectorResults(disconnectApps(target, { port, host }));
       return;
     }
 
