@@ -189,6 +189,362 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return result;
 }
 
+function base64ToUint8(b64: string): Uint8Array {
+  const clean = b64.replace(/^data:[^;]+;base64,/, '').replace(/[\r\n\s]/g, '');
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const lookup = new Int16Array(256).fill(-1);
+  for (let i = 0; i < chars.length; i++) {
+    lookup[chars.charCodeAt(i)] = i;
+  }
+
+  let pad = 0;
+  if (clean.endsWith('==')) pad = 2;
+  else if (clean.endsWith('=')) pad = 1;
+
+  const byteLen = Math.floor((clean.length * 3) / 4) - pad;
+  const out = new Uint8Array(Math.max(0, byteLen));
+  let ptr = 0;
+
+  for (let i = 0; i < clean.length; i += 4) {
+    const c0 = lookup[clean.charCodeAt(i)] ?? 0;
+    const c1 = lookup[clean.charCodeAt(i + 1)] ?? 0;
+    const c2 = clean[i + 2] === '=' ? 0 : (lookup[clean.charCodeAt(i + 2)] ?? 0);
+    const c3 = clean[i + 3] === '=' ? 0 : (lookup[clean.charCodeAt(i + 3)] ?? 0);
+    const n = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3;
+    if (ptr < byteLen) out[ptr++] = (n >> 16) & 0xff;
+    if (ptr < byteLen) out[ptr++] = (n >> 8) & 0xff;
+    if (ptr < byteLen) out[ptr++] = n & 0xff;
+  }
+  return out;
+}
+
+function serializePaints(paints: readonly Paint[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const p of paints) {
+    if (p.visible === false) continue;
+    if (p.type === 'SOLID') {
+      out.push({ type: 'SOLID', hex: rgbToHex(p.color), opacity: p.opacity ?? 1 });
+    } else if (
+      p.type === 'GRADIENT_LINEAR' ||
+      p.type === 'GRADIENT_RADIAL' ||
+      p.type === 'GRADIENT_ANGULAR' ||
+      p.type === 'GRADIENT_DIAMOND'
+    ) {
+      out.push({
+        type: p.type,
+        opacity: p.opacity ?? 1,
+        stops: p.gradientStops.map((s) => ({
+          position: s.position,
+          hex: rgbToHex({ r: s.color.r, g: s.color.g, b: s.color.b }),
+          alpha: s.color.a,
+        })),
+      });
+    } else if (p.type === 'IMAGE') {
+      out.push({
+        type: 'IMAGE',
+        imageHash: p.imageHash,
+        scaleMode: p.scaleMode,
+        opacity: p.opacity ?? 1,
+      });
+    }
+  }
+  return out;
+}
+
+function serializeDesignNode(
+  node: BaseNode,
+  maxDepth = 4,
+  depth = 0,
+  collector?: { colors: Set<string>; fonts: Set<string>; boundVariableIds: Set<string> },
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+  };
+
+  if ('visible' in node) out.visible = node.visible;
+  if ('x' in node) out.x = node.x;
+  if ('y' in node) out.y = node.y;
+  if ('width' in node) out.width = node.width;
+  if ('height' in node) out.height = node.height;
+  if ('opacity' in node) out.opacity = node.opacity;
+
+  if ('cornerRadius' in node) {
+    if (typeof node.cornerRadius === 'number') {
+      out.cornerRadius = node.cornerRadius;
+    } else if ('topLeftRadius' in node) {
+      const rect = node as RectangleNode;
+      out.cornerRadius = {
+        topLeft: rect.topLeftRadius,
+        topRight: rect.topRightRadius,
+        bottomRight: rect.bottomRightRadius,
+        bottomLeft: rect.bottomLeftRadius,
+      };
+    }
+  }
+
+  if ('layoutMode' in node) {
+    out.layoutMode = node.layoutMode;
+    if (node.layoutMode !== 'NONE') {
+      out.itemSpacing = node.itemSpacing;
+      out.paddingTop = node.paddingTop;
+      out.paddingRight = node.paddingRight;
+      out.paddingBottom = node.paddingBottom;
+      out.paddingLeft = node.paddingLeft;
+      out.primaryAxisAlignItems = node.primaryAxisAlignItems;
+      out.counterAxisAlignItems = node.counterAxisAlignItems;
+      if ('layoutWrap' in node) out.layoutWrap = node.layoutWrap;
+    }
+  }
+  if ('layoutSizingHorizontal' in node) out.layoutSizingHorizontal = node.layoutSizingHorizontal;
+  if ('layoutSizingVertical' in node) out.layoutSizingVertical = node.layoutSizingVertical;
+
+  if ('fills' in node && Array.isArray(node.fills)) {
+    const fills = serializePaints(node.fills);
+    if (fills.length > 0) out.fills = fills;
+    if (collector) {
+      for (const f of fills) {
+        if (typeof f.hex === 'string') collector.colors.add(f.hex);
+      }
+    }
+  }
+
+  if ('strokes' in node && Array.isArray(node.strokes)) {
+    const strokes = serializePaints(node.strokes);
+    if (strokes.length > 0) {
+      out.strokes = strokes;
+      if ('strokeWeight' in node && typeof node.strokeWeight === 'number') {
+        out.strokeWeight = node.strokeWeight;
+      }
+      if (collector) {
+        for (const s of strokes) {
+          if (typeof s.hex === 'string') collector.colors.add(s.hex);
+        }
+      }
+    }
+  }
+
+  if ('effects' in node && Array.isArray(node.effects) && node.effects.length > 0) {
+    out.effects = node.effects
+      .filter((e) => e.visible !== false)
+      .map((e) => {
+        const eff: Record<string, unknown> = { type: e.type };
+        if ('radius' in e) eff.radius = e.radius;
+        if ('offset' in e) eff.offset = e.offset;
+        if ('spread' in e) eff.spread = e.spread;
+        if ('color' in e && e.color) {
+          eff.hex = rgbToHex({ r: e.color.r, g: e.color.g, b: e.color.b });
+          eff.alpha = e.color.a;
+        }
+        return eff;
+      });
+  }
+
+  if (node.type === 'TEXT') {
+    out.characters = node.characters;
+    if (typeof node.fontSize === 'number') out.fontSize = node.fontSize;
+    if (node.fontName !== figma.mixed && typeof node.fontName === 'object') {
+      out.fontName = node.fontName;
+      if (collector) {
+        collector.fonts.add(`${node.fontName.family} ${node.fontName.style}`);
+      }
+    }
+    if (node.lineHeight !== figma.mixed) out.lineHeight = node.lineHeight;
+    if (node.letterSpacing !== figma.mixed) out.letterSpacing = node.letterSpacing;
+    out.textAlignHorizontal = node.textAlignHorizontal;
+    if (node.textDecoration !== figma.mixed) out.textDecoration = node.textDecoration;
+  }
+
+  if ('boundVariables' in node && node.boundVariables) {
+    const bv = node.boundVariables as Record<string, unknown>;
+    const keys = Object.keys(bv).filter((k) => bv[k] !== undefined);
+    if (keys.length > 0) {
+      out.boundVariables = bv;
+      if (collector) {
+        for (const k of keys) {
+          const val = bv[k];
+          if (Array.isArray(val)) {
+            for (const item of val) {
+              if (item && typeof item === 'object' && 'id' in item && typeof (item as { id?: unknown }).id === 'string') {
+                collector.boundVariableIds.add((item as { id: string }).id);
+              }
+            }
+          } else if (val && typeof val === 'object' && 'id' in val && typeof (val as { id?: unknown }).id === 'string') {
+            collector.boundVariableIds.add((val as { id: string }).id);
+          }
+        }
+      }
+    }
+  }
+
+  if ('children' in node) {
+    if (depth < maxDepth) {
+      out.children = node.children.map((c) => serializeDesignNode(c, maxDepth, depth + 1, collector));
+    } else {
+      out.childCount = node.children.length;
+    }
+  }
+
+  return out;
+}
+
+function coerceVariableValue(raw: unknown, resolvedType: VariableResolvedDataType): VariableValue {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.aliasVariableId === 'string') {
+      return { type: 'VARIABLE_ALIAS', id: obj.aliasVariableId };
+    }
+    if (obj.type === 'VARIABLE_ALIAS' && typeof obj.id === 'string') {
+      return { type: 'VARIABLE_ALIAS', id: obj.id };
+    }
+  }
+  if (resolvedType === 'COLOR' && typeof raw === 'string') {
+    const { color, opacity } = parseHexColor(raw);
+    return { r: color.r, g: color.g, b: color.b, a: opacity };
+  }
+  return raw as VariableValue;
+}
+
+function resolveModeIdFromCollection(collection: VariableCollection, key: string): string {
+  const byId = collection.modes.find((m) => m.modeId === key);
+  if (byId) return byId.modeId;
+  const byName = collection.modes.find((m) => m.name.toLowerCase() === key.toLowerCase());
+  if (byName) return byName.modeId;
+  throw new Error(`Mode "${key}" not found in collection "${collection.name}"`);
+}
+
+async function createNodeFromParams(
+  kind: string,
+  params: Record<string, unknown>,
+  parent: BaseNode & ChildrenMixin,
+): Promise<SceneNode> {
+  const upper = kind.toUpperCase();
+  let created: SceneNode;
+
+  if (upper === 'FRAME') {
+    const frame = figma.createFrame();
+    frame.name = typeof params.name === 'string' ? params.name : 'Frame';
+    frame.resize(
+      typeof params.width === 'number' ? params.width : 320,
+      typeof params.height === 'number' ? params.height : 200,
+    );
+    if (typeof params.fillHex === 'string') frame.fills = [makeSolidPaint(params.fillHex)];
+    if (typeof params.strokeHex === 'string') {
+      frame.strokes = [makeSolidPaint(params.strokeHex)];
+      frame.strokeWeight = typeof params.strokeWeight === 'number' ? params.strokeWeight : 1;
+    }
+    if (typeof params.cornerRadius === 'number') frame.cornerRadius = params.cornerRadius;
+    if (typeof params.clipsContent === 'boolean') frame.clipsContent = params.clipsContent;
+    if (
+      params.layoutMode === 'HORIZONTAL' ||
+      params.layoutMode === 'VERTICAL' ||
+      params.layoutMode === 'NONE'
+    ) {
+      frame.layoutMode = params.layoutMode;
+      if (params.layoutMode !== 'NONE') {
+        if (typeof params.itemSpacing === 'number') frame.itemSpacing = params.itemSpacing;
+        if (typeof params.paddingTop === 'number') frame.paddingTop = params.paddingTop;
+        if (typeof params.paddingRight === 'number') frame.paddingRight = params.paddingRight;
+        if (typeof params.paddingBottom === 'number') frame.paddingBottom = params.paddingBottom;
+        if (typeof params.paddingLeft === 'number') frame.paddingLeft = params.paddingLeft;
+        if (typeof params.primaryAxisAlignItems === 'string') {
+          frame.primaryAxisAlignItems = params.primaryAxisAlignItems as FrameNode['primaryAxisAlignItems'];
+        }
+        if (typeof params.counterAxisAlignItems === 'string') {
+          frame.counterAxisAlignItems = params.counterAxisAlignItems as FrameNode['counterAxisAlignItems'];
+        }
+      }
+    }
+    created = frame;
+  } else if (upper === 'TEXT') {
+    const fontFamily = typeof params.fontFamily === 'string' ? params.fontFamily : 'Inter';
+    const fontStyle = typeof params.fontStyle === 'string' ? params.fontStyle : 'Regular';
+    const loadedFont = await loadFontSafe(fontFamily, fontStyle);
+    const text = figma.createText();
+    text.fontName = loadedFont;
+    text.characters = String(params.characters ?? '');
+    if (typeof params.name === 'string') text.name = params.name;
+    if (typeof params.fontSize === 'number') text.fontSize = params.fontSize;
+    if (typeof params.fillHex === 'string') text.fills = [makeSolidPaint(params.fillHex)];
+    if (typeof params.textAlignHorizontal === 'string') {
+      text.textAlignHorizontal = params.textAlignHorizontal as TextNode['textAlignHorizontal'];
+    }
+    if (typeof params.width === 'number') {
+      text.textAutoResize = 'HEIGHT';
+      text.resize(params.width, text.height);
+    }
+    created = text;
+  } else if (upper === 'RECTANGLE') {
+    const rect = figma.createRectangle();
+    rect.name = typeof params.name === 'string' ? params.name : 'Rectangle';
+    rect.resize(
+      typeof params.width === 'number' ? params.width : 100,
+      typeof params.height === 'number' ? params.height : 100,
+    );
+    if (typeof params.fillHex === 'string') rect.fills = [makeSolidPaint(params.fillHex)];
+    if (typeof params.strokeHex === 'string') {
+      rect.strokes = [makeSolidPaint(params.strokeHex)];
+      rect.strokeWeight = typeof params.strokeWeight === 'number' ? params.strokeWeight : 1;
+    }
+    if (typeof params.cornerRadius === 'number') rect.cornerRadius = params.cornerRadius;
+    created = rect;
+  } else if (upper === 'ELLIPSE') {
+    const ellipse = figma.createEllipse();
+    ellipse.name = typeof params.name === 'string' ? params.name : 'Ellipse';
+    ellipse.resize(
+      typeof params.width === 'number' ? params.width : 80,
+      typeof params.height === 'number' ? params.height : 80,
+    );
+    if (typeof params.fillHex === 'string') ellipse.fills = [makeSolidPaint(params.fillHex)];
+    if (typeof params.strokeHex === 'string') {
+      ellipse.strokes = [makeSolidPaint(params.strokeHex)];
+      ellipse.strokeWeight = typeof params.strokeWeight === 'number' ? params.strokeWeight : 1;
+    }
+    created = ellipse;
+  } else if (upper === 'SVG') {
+    const node = figma.createNodeFromSvg(String(params.svg ?? ''));
+    if (typeof params.name === 'string') node.name = params.name;
+    if (typeof params.width === 'number' && typeof params.height === 'number') {
+      node.resize(params.width, params.height);
+    }
+    created = node;
+  } else if (upper === 'COMPONENT') {
+    const comp = figma.createComponent();
+    comp.name = typeof params.name === 'string' ? params.name : 'Component';
+    comp.resize(
+      typeof params.width === 'number' ? params.width : 200,
+      typeof params.height === 'number' ? params.height : 100,
+    );
+    if (typeof params.fillHex === 'string') comp.fills = [makeSolidPaint(params.fillHex)];
+    created = comp;
+  } else if (upper === 'INSTANCE') {
+    const componentId = String(params.componentId ?? '');
+    const comp = await figma.getNodeByIdAsync(componentId);
+    if (!comp || comp.type !== 'COMPONENT') {
+      throw new Error(`Component "${componentId}" not found`);
+    }
+    const inst = comp.createInstance();
+    if (typeof params.name === 'string') inst.name = params.name;
+    created = inst;
+  } else {
+    throw new Error(`Unsupported batch node type: "${kind}"`);
+  }
+
+  if (typeof params.x === 'number') created.x = params.x;
+  if (typeof params.y === 'number') created.y = params.y;
+  parent.appendChild(created);
+
+  if (typeof params.layoutSizingHorizontal === 'string' && 'layoutSizingHorizontal' in created) {
+    (created as FrameNode).layoutSizingHorizontal = params.layoutSizingHorizontal as FrameNode['layoutSizingHorizontal'];
+  }
+  if (typeof params.layoutSizingVertical === 'string' && 'layoutSizingVertical' in created) {
+    (created as FrameNode).layoutSizingVertical = params.layoutSizingVertical as FrameNode['layoutSizingVertical'];
+  }
+
+  return created;
+}
+
 // ─── Handlers ───
 
 handlers.set('ping', async () => ({
@@ -627,6 +983,391 @@ handlers.set('execute_figma_js', async (params) => {
   const fn = new AsyncFunction('figma', 'params', code);
   const result = await fn(figma, scriptParams);
   return result === undefined ? { ok: true } : result;
+});
+
+handlers.set('get_design_context', async (params) => {
+  let target: BaseNode | null = null;
+  if (typeof params.nodeId === 'string' && params.nodeId.length > 0) {
+    target = await figma.getNodeByIdAsync(params.nodeId);
+    if (!target) throw new Error(`Node "${params.nodeId}" not found`);
+  } else if (figma.currentPage.selection.length > 0) {
+    target = figma.currentPage.selection[0];
+  } else {
+    throw new Error('Provide nodeId or select a node in Figma first');
+  }
+
+  const maxDepth = typeof params.maxDepth === 'number' ? params.maxDepth : 4;
+  const collector = {
+    colors: new Set<string>(),
+    fonts: new Set<string>(),
+    boundVariableIds: new Set<string>(),
+  };
+  const serialized = serializeDesignNode(target, maxDepth, 0, collector);
+
+  const out: Record<string, unknown> = {
+    node: serialized,
+    summary: {
+      colors: Array.from(collector.colors),
+      fonts: Array.from(collector.fonts),
+      boundVariableIds: Array.from(collector.boundVariableIds),
+    },
+  };
+
+  if (params.includeScreenshot !== false && 'exportAsync' in target) {
+    const scale = typeof params.screenshotScale === 'number' ? params.screenshotScale : 1;
+    const bytes = await (target as SceneNode).exportAsync({
+      format: 'PNG',
+      constraint: { type: 'SCALE', value: scale },
+    });
+    out.screenshot = {
+      mimeType: 'image/png',
+      byteLength: bytes.length,
+      base64: uint8ToBase64(bytes),
+    };
+  }
+
+  return out;
+});
+
+handlers.set('get_screenshot', async (params) => {
+  let target: BaseNode | null = null;
+  if (typeof params.nodeId === 'string' && params.nodeId.length > 0) {
+    target = await figma.getNodeByIdAsync(params.nodeId);
+    if (!target) throw new Error(`Node "${params.nodeId}" not found`);
+  } else if (figma.currentPage.selection.length > 0) {
+    target = figma.currentPage.selection[0];
+  } else {
+    target = figma.currentPage;
+  }
+
+  if (!('exportAsync' in target)) {
+    throw new Error(`Node "${target.id}" (${target.type}) is not exportable`);
+  }
+
+  const format = params.format === 'JPG' ? 'JPG' : 'PNG';
+  const scale = typeof params.scale === 'number' ? params.scale : 2;
+  const bytes = await (target as SceneNode | PageNode).exportAsync({
+    format,
+    constraint: { type: 'SCALE', value: scale },
+  });
+
+  return {
+    nodeId: target.id,
+    nodeName: target.name,
+    format,
+    mimeType: format === 'JPG' ? 'image/jpeg' : 'image/png',
+    byteLength: bytes.length,
+    base64: uint8ToBase64(bytes),
+  };
+});
+
+handlers.set('create_variable_collection', async (params) => {
+  const name = String(params.name ?? '').trim();
+  if (!name) throw new Error('Collection name is required');
+  const collection = figma.variables.createVariableCollection(name);
+
+  if (Array.isArray(params.modes) && params.modes.length > 0) {
+    const modeNames = params.modes.filter((m): m is string => typeof m === 'string' && m.trim().length > 0);
+    if (modeNames.length > 0 && collection.modes.length > 0) {
+      collection.renameMode(collection.modes[0].modeId, modeNames[0]);
+      for (let i = 1; i < modeNames.length; i++) {
+        collection.addMode(modeNames[i]);
+      }
+    }
+  }
+
+  return {
+    id: collection.id,
+    name: collection.name,
+    modes: collection.modes,
+  };
+});
+
+handlers.set('create_variable', async (params) => {
+  const name = String(params.name ?? '').trim();
+  const collectionId = String(params.collectionId ?? '');
+  const resolvedType = String(params.resolvedType ?? '') as VariableResolvedDataType;
+  if (!name) throw new Error('Variable name is required');
+
+  const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+  if (!collection) throw new Error(`Variable collection "${collectionId}" not found`);
+
+  const variable = figma.variables.createVariable(name, collection, resolvedType);
+
+  if (params.valuesByMode && typeof params.valuesByMode === 'object') {
+    const entries = Object.entries(params.valuesByMode as Record<string, unknown>);
+    for (const [modeKey, rawVal] of entries) {
+      const modeId = resolveModeIdFromCollection(collection, modeKey);
+      variable.setValueForMode(modeId, coerceVariableValue(rawVal, resolvedType));
+    }
+  }
+
+  return {
+    id: variable.id,
+    name: variable.name,
+    resolvedType: variable.resolvedType,
+    variableCollectionId: variable.variableCollectionId,
+    valuesByMode: variable.valuesByMode,
+  };
+});
+
+handlers.set('set_variable_value', async (params) => {
+  const variableId = String(params.variableId ?? '');
+  const variable = await figma.variables.getVariableByIdAsync(variableId);
+  if (!variable) throw new Error(`Variable "${variableId}" not found`);
+
+  const collection = await figma.variables.getVariableCollectionByIdAsync(variable.variableCollectionId);
+  if (!collection) throw new Error(`Collection for variable "${variableId}" not found`);
+
+  const modeKey =
+    typeof params.modeId === 'string' && params.modeId
+      ? params.modeId
+      : typeof params.modeName === 'string' && params.modeName
+        ? params.modeName
+        : collection.defaultModeId;
+
+  const modeId = resolveModeIdFromCollection(collection, modeKey);
+  variable.setValueForMode(modeId, coerceVariableValue(params.value, variable.resolvedType));
+
+  return {
+    id: variable.id,
+    name: variable.name,
+    resolvedType: variable.resolvedType,
+    modeId,
+    valuesByMode: variable.valuesByMode,
+  };
+});
+
+handlers.set('bind_variable', async (params) => {
+  const nodeId = String(params.nodeId ?? '');
+  const variableId = String(params.variableId ?? '');
+  const field = String(params.field ?? '');
+
+  const [node, variable] = await Promise.all([
+    figma.getNodeByIdAsync(nodeId),
+    figma.variables.getVariableByIdAsync(variableId),
+  ]);
+  if (!node) throw new Error(`Node "${nodeId}" not found`);
+  if (!variable) throw new Error(`Variable "${variableId}" not found`);
+
+  if (field === 'fill' || field === 'stroke') {
+    const prop = field === 'fill' ? 'fills' : 'strokes';
+    if (!(prop in node)) {
+      throw new Error(`Node "${nodeId}" (${node.type}) does not support ${prop}`);
+    }
+    const geo = node as GeometryMixin;
+    const current = Array.isArray(geo[prop]) ? [...(geo[prop] as Paint[])] : [];
+    const idx = typeof params.paintIndex === 'number' ? params.paintIndex : 0;
+    while (current.length <= idx) {
+      current.push(makeSolidPaint('#000000'));
+    }
+    const targetPaint = current[idx];
+    if (targetPaint.type !== 'SOLID') {
+      throw new Error(`Paint at index ${idx} must be SOLID to bind a color variable`);
+    }
+    current[idx] = figma.variables.setBoundVariableForPaint(targetPaint, 'color', variable);
+    geo[prop] = current;
+    return { nodeId, variableId, field, paintIndex: idx, bound: true };
+  }
+
+  if (!('setBoundVariable' in node)) {
+    throw new Error(`Node "${nodeId}" (${node.type}) does not support variable binding`);
+  }
+  (node as unknown as { setBoundVariable: (f: VariableBindableNodeField, v: Variable | null) => void }).setBoundVariable(
+    field as VariableBindableNodeField,
+    variable,
+  );
+  return { nodeId, variableId, field, bound: true };
+});
+
+handlers.set('create_component_set', async (params) => {
+  const ids = Array.isArray(params.componentIds)
+    ? params.componentIds.filter((v): v is string => typeof v === 'string')
+    : [];
+  if (ids.length < 2) {
+    throw new Error('Provide at least 2 componentIds to create a component set');
+  }
+
+  const resolved = await Promise.all(ids.map((id) => figma.getNodeByIdAsync(id)));
+  const components: ComponentNode[] = [];
+  for (let i = 0; i < resolved.length; i++) {
+    const n = resolved[i];
+    if (!n || n.type !== 'COMPONENT') {
+      throw new Error(`Node "${ids[i]}" is not a COMPONENT`);
+    }
+    components.push(n);
+  }
+
+  const parent =
+    typeof params.parentId === 'string' && params.parentId.length > 0
+      ? await resolveParent(params.parentId)
+      : (components[0].parent && 'appendChild' in components[0].parent
+          ? (components[0].parent as BaseNode & ChildrenMixin)
+          : figma.currentPage);
+
+  const set = figma.combineAsVariants(components, parent);
+  if (typeof params.name === 'string') set.name = params.name;
+  if (params.layoutMode === 'HORIZONTAL' || params.layoutMode === 'VERTICAL' || params.layoutMode === 'NONE') {
+    set.layoutMode = params.layoutMode;
+    if (params.layoutMode !== 'NONE') {
+      if (typeof params.itemSpacing === 'number') set.itemSpacing = params.itemSpacing;
+      if (typeof params.padding === 'number') {
+        set.paddingTop = params.padding;
+        set.paddingRight = params.padding;
+        set.paddingBottom = params.padding;
+        set.paddingLeft = params.padding;
+      }
+    }
+  }
+  return serializeNode(set, 1);
+});
+
+handlers.set('create_section', async (params) => {
+  const parent = await resolveParent(params.parentId);
+  const section = figma.createSection();
+  section.name = typeof params.name === 'string' ? params.name : 'Section';
+  if (typeof params.x === 'number') section.x = params.x;
+  if (typeof params.y === 'number') section.y = params.y;
+  section.resizeWithoutConstraints(
+    typeof params.width === 'number' ? params.width : 800,
+    typeof params.height === 'number' ? params.height : 600,
+  );
+  if (typeof params.fillHex === 'string') {
+    section.fills = [makeSolidPaint(params.fillHex)];
+  }
+  parent.appendChild(section);
+
+  if (Array.isArray(params.childNodeIds)) {
+    for (const id of params.childNodeIds) {
+      if (typeof id !== 'string') continue;
+      const child = await figma.getNodeByIdAsync(id);
+      if (child && child.type !== 'DOCUMENT' && child.type !== 'PAGE') {
+        section.appendChild(child as SceneNode);
+      }
+    }
+  }
+
+  return serializeNode(section, 1);
+});
+
+handlers.set('set_image_fill', async (params) => {
+  const nodeId = String(params.nodeId ?? '');
+  const imageBase64 = String(params.imageBase64 ?? '');
+  if (!imageBase64) throw new Error('imageBase64 is required');
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node || !('fills' in node)) {
+    throw new Error(`Node "${nodeId}" not found or does not support fills`);
+  }
+
+  const bytes = base64ToUint8(imageBase64);
+  const image = figma.createImage(bytes);
+  const scaleMode = (
+    params.scaleMode === 'FIT' || params.scaleMode === 'CROP' || params.scaleMode === 'TILE'
+      ? params.scaleMode
+      : 'FILL'
+  ) as ImagePaint['scaleMode'];
+
+  (node as GeometryMixin).fills = [
+    {
+      type: 'IMAGE',
+      imageHash: image.hash,
+      scaleMode,
+    },
+  ];
+
+  return { nodeId, imageHash: image.hash, scaleMode };
+});
+
+handlers.set('clone_node', async (params) => {
+  const nodeId = String(params.nodeId ?? '');
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node || node.type === 'DOCUMENT' || node.type === 'PAGE' || !('clone' in node)) {
+    throw new Error(`Cloneable node "${nodeId}" not found`);
+  }
+
+  const cloned = (node as SceneNode).clone();
+  if (typeof params.parentId === 'string' && params.parentId.length > 0) {
+    const parent = await resolveParent(params.parentId);
+    parent.appendChild(cloned);
+  }
+  if (typeof params.name === 'string') cloned.name = params.name;
+  if (typeof params.x === 'number') cloned.x = params.x;
+  if (typeof params.y === 'number') cloned.y = params.y;
+
+  return serializeNode(cloned, 1);
+});
+
+handlers.set('group_nodes', async (params) => {
+  const ids = Array.isArray(params.nodeIds)
+    ? params.nodeIds.filter((v): v is string => typeof v === 'string')
+    : [];
+  if (ids.length === 0) throw new Error('Provide at least 1 nodeId to group');
+
+  const resolved = await Promise.all(ids.map((id) => figma.getNodeByIdAsync(id)));
+  const nodes = resolved.filter(
+    (n): n is SceneNode => n !== null && n.type !== 'DOCUMENT' && n.type !== 'PAGE',
+  );
+  if (nodes.length === 0) throw new Error('No valid SceneNodes found to group');
+
+  const parent =
+    typeof params.parentId === 'string' && params.parentId.length > 0
+      ? await resolveParent(params.parentId)
+      : (nodes[0].parent && 'appendChild' in nodes[0].parent
+          ? (nodes[0].parent as BaseNode & ChildrenMixin)
+          : figma.currentPage);
+
+  const group = figma.group(nodes, parent);
+  if (typeof params.name === 'string') group.name = params.name;
+  return serializeNode(group, 1);
+});
+
+handlers.set('create_page', async (params) => {
+  const page = figma.createPage();
+  if (typeof params.name === 'string' && params.name.trim().length > 0) {
+    page.name = params.name;
+  }
+  if (params.switchTo !== false) {
+    await figma.setCurrentPageAsync(page);
+  }
+  return {
+    id: page.id,
+    name: page.name,
+    isCurrent: page.id === figma.currentPage.id,
+  };
+});
+
+handlers.set('batch_create', async (params) => {
+  const rootParent = await resolveParent(params.parentId);
+  const specs = Array.isArray(params.nodes) ? params.nodes : [];
+  let createdCount = 0;
+
+  async function buildTree(
+    items: unknown[],
+    parent: BaseNode & ChildrenMixin,
+  ): Promise<Array<Record<string, unknown>>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const raw of items) {
+      if (!raw || typeof raw !== 'object') continue;
+      const spec = raw as Record<string, unknown>;
+      const kind = typeof spec.type === 'string' ? spec.type : 'FRAME';
+      const node = await createNodeFromParams(kind, spec, parent);
+      createdCount++;
+      const summary: Record<string, unknown> = {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+      };
+      if (Array.isArray(spec.children) && spec.children.length > 0 && 'appendChild' in node) {
+        summary.children = await buildTree(spec.children, node as BaseNode & ChildrenMixin);
+      }
+      out.push(summary);
+    }
+    return out;
+  }
+
+  const nodes = await buildTree(specs, rootParent);
+  return { createdCount, nodes };
 });
 
 // ─── UI Bridge ───

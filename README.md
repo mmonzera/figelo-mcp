@@ -350,11 +350,14 @@ Pilih sesuai tipe koneksi yang didukung custom connector Anda:
 
 ---
 
-## Available Tools
+## Available Tools (36)
 
 - **Multi-doc & Health**: `list_figma_documents`, `ping`
+- **Design-to-Code & Visual**: `get_design_context` (deep node tree + layout/tokens + screenshot), `get_screenshot` (native MCP image block)
 - **Inspect**: `get_document_info`, `get_pages`, `set_current_page`, `get_selection`, `set_selection`, `get_node`, `find_nodes`, `get_styles`, `get_variables`
-- **Create**: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`, `create_svg`, `create_component`, `create_instance`
+- **Create & Batch**: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`, `create_svg`, `create_component`, `create_instance`, `batch_create`
+- **Design System & Variables**: `create_variable_collection`, `create_variable`, `set_variable_value`, `bind_variable`, `create_component_set`, `create_section`
+- **Media & Structure**: `set_image_fill` (local `filePath`, `imageUrl`, or `imageBase64`), `clone_node`, `group_nodes`, `create_page`
 - **Modify & Export**: `update_node`, `set_auto_layout`, `delete_nodes`, `export_image`
 - **Full Escape Hatch**: `execute_figma_js` (run arbitrary async Figma Plugin API scripts)
 

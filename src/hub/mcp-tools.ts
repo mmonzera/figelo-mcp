@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z, type ZodRawShape } from 'zod';
 import { FIGELO_VERSION, type ToolJsonSchema } from '../shared/protocol.js';
@@ -554,6 +555,336 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     run: forwardToPlugin('execute_figma_js', 45_000),
   },
+  {
+    name: 'get_design_context',
+    description:
+      'Get full design-to-code context (deep node tree, computed layout, fills, strokes, typography, effects, bound variables, color/font summary, plus a visual PNG screenshot) for a nodeId or current selection.',
+    shape: {
+      nodeId: z.string().optional().describe('Target node ID (defaults to first selected node)'),
+      maxDepth: z.number().int().min(0).max(10).optional().describe('Tree depth (default 4)'),
+      includeScreenshot: z.boolean().optional().describe('Attach rendered PNG screenshot (default true)'),
+      screenshotScale: z.number().positive().max(4).optional().describe('Screenshot scale (default 1)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+        maxDepth: { type: 'number' },
+        includeScreenshot: { type: 'boolean' },
+        screenshotScale: { type: 'number' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('get_design_context', 45_000),
+  },
+  {
+    name: 'get_screenshot',
+    description:
+      'Capture a visual PNG/JPG screenshot of a node (or current selection / page) returned as a native image block for AI inspection.',
+    shape: {
+      nodeId: z.string().optional().describe('Target node ID (defaults to selection or current page)'),
+      format: z.enum(['PNG', 'JPG']).optional().describe('Image format (default PNG)'),
+      scale: z.number().positive().max(4).optional().describe('Export scale (default 2)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+        format: { type: 'string', enum: ['PNG', 'JPG'] },
+        scale: { type: 'number' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('get_screenshot', 45_000),
+  },
+  {
+    name: 'create_variable_collection',
+    description: 'Create a Figma variable collection with optional named modes (e.g. ["Light", "Dark"]).',
+    shape: {
+      name: z.string().describe('Collection name'),
+      modes: z.array(z.string()).optional().describe('Optional mode names e.g. ["Light", "Dark"]'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string' },
+        modes: { type: 'array', items: { type: 'string' } },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('create_variable_collection'),
+  },
+  {
+    name: 'create_variable',
+    description: 'Create a design token variable (COLOR, FLOAT, STRING, BOOLEAN) inside a collection with optional mode values.',
+    shape: {
+      collectionId: z.string().describe('Target variable collection ID'),
+      name: z.string().describe('Variable name e.g. color/bg/primary'),
+      resolvedType: z.enum(['COLOR', 'FLOAT', 'STRING', 'BOOLEAN']),
+      valuesByMode: z
+        .record(z.unknown())
+        .optional()
+        .describe('Map of modeId or modeName to value (hex string for COLOR, or { aliasVariableId })'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['collectionId', 'name', 'resolvedType'],
+      properties: {
+        collectionId: { type: 'string' },
+        name: { type: 'string' },
+        resolvedType: { type: 'string', enum: ['COLOR', 'FLOAT', 'STRING', 'BOOLEAN'] },
+        valuesByMode: { type: 'object' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('create_variable'),
+  },
+  {
+    name: 'set_variable_value',
+    description: 'Set or update a variable value for a specific mode (by modeId or modeName).',
+    shape: {
+      variableId: z.string().describe('Target variable ID'),
+      value: z.unknown().describe('Value (hex string for COLOR, number, string, boolean, or { aliasVariableId })'),
+      modeId: z.string().optional().describe('Target mode ID'),
+      modeName: z.string().optional().describe('Target mode name e.g. Dark'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['variableId', 'value'],
+      properties: {
+        variableId: { type: 'string' },
+        value: {},
+        modeId: { type: 'string' },
+        modeName: { type: 'string' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('set_variable_value'),
+  },
+  {
+    name: 'bind_variable',
+    description:
+      'Bind a Figma variable to a node field (fill, stroke, width, height, itemSpacing, paddingTop, paddingRight, paddingBottom, paddingLeft, topLeftRadius, opacity, etc.).',
+    shape: {
+      nodeId: z.string().describe('Target node ID'),
+      variableId: z.string().describe('Variable ID to bind'),
+      field: z.string().describe('Target property e.g. fill, stroke, itemSpacing, paddingLeft, topLeftRadius, width'),
+      paintIndex: z.number().int().min(0).optional().describe('Paint index when field is fill or stroke (default 0)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodeId', 'variableId', 'field'],
+      properties: {
+        nodeId: { type: 'string' },
+        variableId: { type: 'string' },
+        field: { type: 'string' },
+        paintIndex: { type: 'number' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('bind_variable'),
+  },
+  {
+    name: 'create_component_set',
+    description: 'Combine 2 or more existing Components into a Variant ComponentSet.',
+    shape: {
+      componentIds: z.array(z.string()).min(2).describe('Component node IDs to combine as variants'),
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      layoutMode: z.enum(['NONE', 'HORIZONTAL', 'VERTICAL']).optional(),
+      itemSpacing: z.number().optional(),
+      padding: z.number().optional(),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['componentIds'],
+      properties: {
+        componentIds: { type: 'array', items: { type: 'string' } },
+        name: { type: 'string' },
+        parentId: { type: 'string' },
+        layoutMode: { type: 'string', enum: ['NONE', 'HORIZONTAL', 'VERTICAL'] },
+        itemSpacing: { type: 'number' },
+        padding: { type: 'number' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('create_component_set'),
+  },
+  {
+    name: 'create_section',
+    description: 'Create a Figma Section on the canvas and optionally move childNodeIds inside it.',
+    shape: {
+      name: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().positive().optional(),
+      height: z.number().positive().optional(),
+      fillHex: z.string().optional(),
+      parentId: z.string().optional(),
+      childNodeIds: z.array(z.string()).optional().describe('Optional existing node IDs to place inside the section'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        fillHex: { type: 'string' },
+        parentId: { type: 'string' },
+        childNodeIds: { type: 'array', items: { type: 'string' } },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('create_section'),
+  },
+  {
+    name: 'set_image_fill',
+    description: 'Set an image fill on a node from a local filePath, remote imageUrl, or base64 string.',
+    shape: {
+      nodeId: z.string().describe('Target node ID'),
+      filePath: z.string().optional().describe('Local image file path on disk (PNG/JPG/WebP)'),
+      imageUrl: z.string().optional().describe('HTTP/HTTPS image URL to fetch'),
+      imageBase64: z.string().optional().describe('Raw or data-URI base64 image bytes'),
+      scaleMode: z.enum(['FILL', 'FIT', 'CROP', 'TILE']).optional().describe('Image scaleMode (default FILL)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodeId'],
+      properties: {
+        nodeId: { type: 'string' },
+        filePath: { type: 'string' },
+        imageUrl: { type: 'string' },
+        imageBase64: { type: 'string' },
+        scaleMode: { type: 'string', enum: ['FILL', 'FIT', 'CROP', 'TILE'] },
+        channel: channelJsonProp,
+      },
+    },
+    run: async (args, broker) => {
+      const { nodeId, filePath, imageUrl, imageBase64, scaleMode, channel } = args;
+      let resolvedBase64 = '';
+      if (typeof filePath === 'string' && filePath.length > 0) {
+        resolvedBase64 = readFileSync(filePath).toString('base64');
+      } else if (typeof imageUrl === 'string' && imageUrl.length > 0) {
+        const res = await fetch(imageUrl);
+        if (!res.ok) {
+          throw new Error(`Failed to fetch imageUrl (${res.status} ${res.statusText})`);
+        }
+        resolvedBase64 = Buffer.from(await res.arrayBuffer()).toString('base64');
+      } else if (typeof imageBase64 === 'string' && imageBase64.length > 0) {
+        resolvedBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+      } else {
+        throw new Error('Provide one of filePath, imageUrl, or imageBase64');
+      }
+
+      return broker.callPlugin(
+        'set_image_fill',
+        { nodeId, imageBase64: resolvedBase64, scaleMode },
+        {
+          channel: typeof channel === 'string' && channel.length > 0 ? channel : undefined,
+          timeoutMs: 45_000,
+        },
+      );
+    },
+  },
+  {
+    name: 'clone_node',
+    description: 'Duplicate an existing node with optional new name, position, and parentId.',
+    shape: {
+      nodeId: z.string().describe('Source node ID to clone'),
+      name: z.string().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      parentId: z.string().optional(),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodeId'],
+      properties: {
+        nodeId: { type: 'string' },
+        name: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        parentId: { type: 'string' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('clone_node'),
+  },
+  {
+    name: 'group_nodes',
+    description: 'Group one or more nodes together with an optional group name.',
+    shape: {
+      nodeIds: z.array(z.string()).min(1).describe('Node IDs to group'),
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodeIds'],
+      properties: {
+        nodeIds: { type: 'array', items: { type: 'string' } },
+        name: { type: 'string' },
+        parentId: { type: 'string' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('group_nodes'),
+  },
+  {
+    name: 'create_page',
+    description: 'Create a new page in the Figma document and optionally switch to it.',
+    shape: {
+      name: z.string().optional().describe('Page name'),
+      switchTo: z.boolean().optional().describe('Switch active page to the new page (default true)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        switchTo: { type: 'boolean' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('create_page'),
+  },
+  {
+    name: 'batch_create',
+    description:
+      'Create a nested UI tree of frames, texts, shapes, SVGs, components, and instances in a single call.',
+    shape: {
+      parentId: z.string().optional().describe('Optional container node ID (defaults to current page)'),
+      nodes: z
+        .array(z.record(z.unknown()))
+        .min(1)
+        .describe('Array of node specs ({ type: "FRAME"|"TEXT"|"RECTANGLE"|"ELLIPSE"|"SVG"|"COMPONENT"|"INSTANCE", children?: [...], ...props })'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodes'],
+      properties: {
+        parentId: { type: 'string' },
+        nodes: { type: 'array', items: { type: 'object' } },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('batch_create', 45_000),
+  },
 ];
 
 const TOOL_MAP = new Map<string, ToolDefinition>(
@@ -582,6 +913,69 @@ export async function executeToolWithBroker(
   return def.run(parsed as Record<string, unknown>, broker);
 }
 
+export type McpContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+/**
+ * Formats plugin tool output into MCP content blocks, emitting native image blocks
+ * for screenshot responses without bloating text output with raw base64 data.
+ */
+export function formatMcpToolResult(
+  toolName: string,
+  result: unknown,
+): { content: McpContentBlock[] } {
+  if (
+    toolName === 'get_screenshot' &&
+    result &&
+    typeof result === 'object' &&
+    !Array.isArray(result)
+  ) {
+    const rec = result as Record<string, unknown>;
+    if (typeof rec.base64 === 'string' && typeof rec.mimeType === 'string') {
+      const { base64, ...meta } = rec;
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify(meta, null, 2) },
+          { type: 'image', data: base64, mimeType: rec.mimeType },
+        ],
+      };
+    }
+  }
+
+  if (
+    toolName === 'get_design_context' &&
+    result &&
+    typeof result === 'object' &&
+    !Array.isArray(result)
+  ) {
+    const rec = result as Record<string, unknown>;
+    const ss = rec.screenshot;
+    if (ss && typeof ss === 'object' && !Array.isArray(ss)) {
+      const ssRec = ss as Record<string, unknown>;
+      if (typeof ssRec.base64 === 'string' && typeof ssRec.mimeType === 'string') {
+        const { base64, ...ssMeta } = ssRec;
+        const sanitized = { ...rec, screenshot: ssMeta };
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify(sanitized, null, 2) },
+            { type: 'image', data: base64, mimeType: ssRec.mimeType },
+          ],
+        };
+      }
+    }
+  }
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+      },
+    ],
+  };
+}
+
 export function createFigeloMcpServer(executor: ToolExecutor): McpServer {
   const server = new McpServer(
     { name: 'FigeloMCP', version: FIGELO_VERSION },
@@ -602,14 +996,7 @@ export function createFigeloMcpServer(executor: ToolExecutor): McpServer {
       async (args: Record<string, unknown>) => {
         try {
           const result = await executor(def.name, args ?? {});
-          return {
-            content: [
-              {
-                type: 'text',
-                text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return formatMcpToolResult(def.name, result);
         } catch (err) {
           return {
             isError: true,
