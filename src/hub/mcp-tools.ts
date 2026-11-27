@@ -37,6 +37,23 @@ function forwardToPlugin(method: string, timeoutMs?: number) {
   };
 }
 
+export const FIGELO_MCP_INSTRUCTIONS = [
+  'FigeloMCP connects AI agents to Figma Desktop. Follow this Design Agent Operating Procedure:',
+  '',
+  '1. Setup: Call `list_figma_documents` first to confirm the active document/channel (pass `channel` when multiple Figma files are open), then inspect with `get_pages` and `get_selection`.',
+  '2. Reference Rule: Screenshots are visual references only — NEVER embed a reference screenshot or full-UI raster image into the output frame.',
+  '3. Discover First: Call `search_design_system` before mutating anything. Match existing typography, spacing, variables, styles, and components. Never blindly default to Inter.',
+  '4. Build: Create one auto-layout wrapper frame clear of existing canvas content. Batch related sections in `execute_figma_js` (or `batch_create`) rather than one layer per call. Always return created/mutated node IDs as string literals. Reuse local components, variables, and styles. Use `create_svg` / `figma.createNodeFromSvg` for icons (never rotated primitives).',
+  '5. Plugin API Rules:',
+  '   - Colors use 0–1 `{ r, g, b }` with `opacity` on the paint object (not `a` inside `color`).',
+  '   - Clone -> modify -> reassign `fills` and `strokes` arrays.',
+  '   - Always `await figma.loadFontAsync()` (verified via `figma.listAvailableFontsAsync()`) before mutating text.',
+  '   - Append children to auto-layout parents BEFORE setting `HUG` / `FILL` sizing; call `resize()` before sizing modes.',
+  '   - Use at most one `await figma.setCurrentPageAsync()` per call; never call `figma.notify()`.',
+  '   - If `execute_figma_js` returns `ok: false`, inspect `safeToRetryWithoutCanvasRead` and `createdNodeIds` before retrying.',
+  '6. Validate: Run `audit_frame` + one `get_screenshot`, fix only real visual/structural issues, then take one post-fix `get_screenshot`.',
+].join('\n');
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'list_figma_documents',
@@ -201,6 +218,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       primaryAxisAlignItems: z.enum(['MIN', 'CENTER', 'MAX', 'SPACE_BETWEEN']).optional(),
       counterAxisAlignItems: z.enum(['MIN', 'CENTER', 'MAX', 'BASELINE']).optional(),
       clipsContent: z.boolean().optional(),
+      placeholder: z
+        .boolean()
+        .optional()
+        .describe('Mark frame as a section placeholder (stored in pluginData with subtle dashed styling)'),
       channel: channelSchema,
     },
     inputSchema: {
@@ -225,6 +246,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         primaryAxisAlignItems: { type: 'string', enum: ['MIN', 'CENTER', 'MAX', 'SPACE_BETWEEN'] },
         counterAxisAlignItems: { type: 'string', enum: ['MIN', 'CENTER', 'MAX', 'BASELINE'] },
         clipsContent: { type: 'boolean' },
+        placeholder: { type: 'boolean' },
         channel: channelJsonProp,
       },
     },
@@ -436,6 +458,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       characters: z.string().optional().describe('New text characters if node is TEXT'),
       layoutSizingHorizontal: z.enum(['FIXED', 'HUG', 'FILL']).optional(),
       layoutSizingVertical: z.enum(['FIXED', 'HUG', 'FILL']).optional(),
+      placeholder: z
+        .boolean()
+        .optional()
+        .describe('Set or clear section placeholder marker and subtle dashed placeholder styling'),
       channel: channelSchema,
     },
     inputSchema: {
@@ -457,6 +483,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         characters: { type: 'string' },
         layoutSizingHorizontal: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'] },
         layoutSizingVertical: { type: 'string', enum: ['FIXED', 'HUG', 'FILL'] },
+        placeholder: { type: 'boolean' },
         channel: channelJsonProp,
       },
     },
@@ -538,7 +565,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'execute_figma_js',
     description:
-      'Execute custom async JavaScript inside the Figma Plugin sandbox with `figma` and `params` in scope. Useful as a full-power escape hatch for any Figma Plugin API operation.',
+      'Execute custom async JavaScript inside the Figma Plugin sandbox with `figma` and `params` in scope. On error, returns structured `{ ok: false, error, safeToRetryWithoutCanvasRead, createdNodeIds }` metadata.',
     shape: {
       code: z.string().describe('Async function body receiving (figma, params). Return a JSON-serializable value.'),
       params: z.record(z.unknown()).optional().describe('Optional parameters passed to the script'),
@@ -885,6 +912,49 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     run: forwardToPlugin('batch_create', 45_000),
   },
+  {
+    name: 'search_design_system',
+    description:
+      'Discover local components, component sets (with properties/variant options), local styles, local variable collections/variables, and enabled Team Library variables in one compact read-only call.',
+    shape: {
+      query: z.string().optional().describe('Optional case-insensitive keyword/substring filter'),
+      includeVariables: z.boolean().optional().describe('Include local and library variables (default true)'),
+      includeStyles: z.boolean().optional().describe('Include local text, paint, and effect styles (default true)'),
+      includeComponents: z.boolean().optional().describe('Include local components and component sets (default true)'),
+      limit: z.number().int().min(1).max(200).optional().describe('Max items per category (default 50)'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        includeVariables: { type: 'boolean' },
+        includeStyles: { type: 'boolean' },
+        includeComponents: { type: 'boolean' },
+        limit: { type: 'number' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('search_design_system', 45_000),
+  },
+  {
+    name: 'audit_frame',
+    description:
+      'Run automated pre-screenshot structural and visual validation on a frame (node counts, zero-size nodes, clipped/overflowing nodes, suspicious full-frame raster images, fonts used, placeholder sections, and unbound style warnings).',
+    shape: {
+      nodeId: z.string().describe('Target frame or wrapper node ID to audit'),
+      channel: channelSchema,
+    },
+    inputSchema: {
+      type: 'object',
+      required: ['nodeId'],
+      properties: {
+        nodeId: { type: 'string' },
+        channel: channelJsonProp,
+      },
+    },
+    run: forwardToPlugin('audit_frame', 45_000),
+  },
 ];
 
 const TOOL_MAP = new Map<string, ToolDefinition>(
@@ -980,9 +1050,7 @@ export function createFigeloMcpServer(executor: ToolExecutor): McpServer {
   const server = new McpServer(
     { name: 'FigeloMCP', version: FIGELO_VERSION },
     {
-      instructions:
-        'FigeloMCP connects multiple AI coding agents and custom harnesses simultaneously to Figma Desktop. ' +
-        'Use list_figma_documents if multiple Figma files are open, and pass `channel` to target a specific document.',
+      instructions: FIGELO_MCP_INSTRUCTIONS,
     },
   );
 

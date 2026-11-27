@@ -1,6 +1,8 @@
 export * from './shared/protocol.js';
+export * from './shared/design-helpers.js';
 export { PluginBroker, type PluginConnection } from './hub/plugin-broker.js';
 export {
+  FIGELO_MCP_INSTRUCTIONS,
   TOOL_DEFINITIONS,
   createFigeloMcpServer,
   executeToolWithBroker,

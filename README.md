@@ -350,16 +350,32 @@ Pilih sesuai tipe koneksi yang didukung custom connector Anda:
 
 ---
 
-## Available Tools (36)
+## Built-in Design Agent SOP (`instructions`)
+
+FigeloMCP ships with a built-in MCP server `instructions` block (Design Agent Operating Procedure) sent automatically to every connected MCP client on initialization:
+
+- **Setup**: Confirm the active document/channel with `list_figma_documents`, then inspect with `get_pages` / `get_selection`.
+- **Reference Rule**: Treat screenshots as visual references only — never embed a reference screenshot or full-UI raster into the output frame.
+- **Discover First**: Call `search_design_system` before mutating anything to match existing typography, spacing, tokens, styles, and components (never blindly default to Inter).
+- **Build**: Use one auto-layout wrapper frame clear of existing canvas content, batch sections in `execute_figma_js` (or `batch_create`), return created/mutated node IDs as string literals, reuse local components/variables/styles, and use `create_svg` / `figma.createNodeFromSvg` for icons.
+- **Plugin API Safety**: 0–1 `{ r, g, b }` colors with `opacity` on paint, clone-modify-reassign `fills`/`strokes`, `loadFontAsync` before text edits, append children before `HUG`/`FILL` sizing, `resize()` before sizing modes, max one `setCurrentPageAsync()` per call, and never call `figma.notify()`.
+- **Validate**: Run `audit_frame` + one `get_screenshot`, fix real visual/structural issues, then verify with one post-fix `get_screenshot`.
+
+---
+
+## Available Tools (38)
 
 - **Multi-doc & Health**: `list_figma_documents`, `ping`
+- **Design System Discovery & Validation**:
+  - `search_design_system` (local components & component sets with `TEXT`/`BOOLEAN`/`VARIANT` properties, local styles, local variable collections/variables, plus enabled Team Library variables with optional keyword `query` & `limit`)
+  - `audit_frame` (pre-screenshot structural validation: descendant counts, zero-size nodes, clipped/overflowing & truncated text nodes, suspicious `>= 80%` full-frame raster images, distinct fonts used, remaining `placeholder` sections, and unbound style warnings)
 - **Design-to-Code & Visual**: `get_design_context` (deep node tree + layout/tokens + screenshot), `get_screenshot` (native MCP image block)
 - **Inspect**: `get_document_info`, `get_pages`, `set_current_page`, `get_selection`, `set_selection`, `get_node`, `find_nodes`, `get_styles`, `get_variables`
-- **Create & Batch**: `create_frame`, `create_text`, `create_rectangle`, `create_ellipse`, `create_svg`, `create_component`, `create_instance`, `batch_create`
+- **Create & Batch**: `create_frame` (supports optional `placeholder: boolean`), `create_text`, `create_rectangle`, `create_ellipse`, `create_svg`, `create_component`, `create_instance`, `batch_create`
 - **Design System & Variables**: `create_variable_collection`, `create_variable`, `set_variable_value`, `bind_variable`, `create_component_set`, `create_section`
 - **Media & Structure**: `set_image_fill` (local `filePath`, `imageUrl`, or `imageBase64`), `clone_node`, `group_nodes`, `create_page`
-- **Modify & Export**: `update_node`, `set_auto_layout`, `delete_nodes`, `export_image`
-- **Full Escape Hatch**: `execute_figma_js` (run arbitrary async Figma Plugin API scripts)
+- **Modify & Export**: `update_node` (supports optional `placeholder: boolean`), `set_auto_layout`, `delete_nodes`, `export_image`
+- **Full Escape Hatch**: `execute_figma_js` (run arbitrary async Figma Plugin API scripts; returns structured `{ ok: false, error, safeToRetryWithoutCanvasRead, createdNodeIds }` metadata on errors and soft timeout warnings near the 45s limit)
 
 ## CLI Commands
 

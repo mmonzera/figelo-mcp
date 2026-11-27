@@ -5,6 +5,24 @@
  * so concurrent requests from multiple AI clients never interleave mutations.
  */
 
+import {
+  analyzeAuditTree,
+  classifyExecuteJsFailure,
+  evaluateExecuteJsTimeoutWarning,
+  EXECUTE_JS_SOFT_WARN_MS,
+  EXECUTE_JS_TIMEOUT_MS,
+  filterDesignSystemInventory,
+  PLACEHOLDER_PLUGIN_DATA_KEY,
+  type AuditNodeSnapshot,
+  type CanvasNodeFingerprint,
+  type CanvasSnapshot,
+  type DesignSystemComponentItem,
+  type DesignSystemComponentProperty,
+  type DesignSystemLibraryCollectionItem,
+  type DesignSystemLibraryVariableItem,
+  type RawDesignSystemInventory,
+} from '../../src/shared/design-helpers.js';
+
 const PLUGIN_VERSION = '0.1.0';
 const CHANNEL_STORAGE_PREFIX = 'figelo_channel_';
 
@@ -153,6 +171,9 @@ function serializeNode(node: BaseNode, maxDepth = 2, depth = 0): Record<string, 
       out.fontName = node.fontName;
     }
     out.textAlignHorizontal = node.textAlignHorizontal;
+  }
+  if ('getPluginData' in node && node.getPluginData(PLACEHOLDER_PLUGIN_DATA_KEY) === 'true') {
+    out.placeholder = true;
   }
   if ('children' in node) {
     if (depth < maxDepth) {
@@ -378,6 +399,9 @@ function serializeDesignNode(
     }
   }
 
+  if ('getPluginData' in node && node.getPluginData(PLACEHOLDER_PLUGIN_DATA_KEY) === 'true') {
+    out.placeholder = true;
+  }
   if ('children' in node) {
     if (depth < maxDepth) {
       out.children = node.children.map((c) => serializeDesignNode(c, maxDepth, depth + 1, collector));
@@ -412,6 +436,55 @@ function resolveModeIdFromCollection(collection: VariableCollection, key: string
   const byName = collection.modes.find((m) => m.name.toLowerCase() === key.toLowerCase());
   if (byName) return byName.modeId;
   throw new Error(`Mode "${key}" not found in collection "${collection.name}"`);
+}
+
+function applyPlaceholderState(
+  node: BaseNode,
+  isPlaceholder: boolean,
+  options: { hasExplicitFill?: boolean; hasExplicitStroke?: boolean; isCreate?: boolean } = {},
+): void {
+  const wasPlaceholder =
+    'getPluginData' in node && node.getPluginData(PLACEHOLDER_PLUGIN_DATA_KEY) === 'true';
+  if ('setPluginData' in node) {
+    node.setPluginData(PLACEHOLDER_PLUGIN_DATA_KEY, isPlaceholder ? 'true' : 'false');
+  }
+
+  if (isPlaceholder) {
+    if (!options.hasExplicitStroke && 'strokes' in node) {
+      const geo = node as GeometryMixin;
+      geo.strokes = [
+        {
+          type: 'SOLID',
+          color: { r: 0.58, g: 0.64, b: 0.72 },
+          opacity: 0.8,
+        },
+      ];
+      geo.strokeWeight = 1;
+      if ('dashPattern' in node) {
+        (node as GeometryMixin).dashPattern = [6, 4];
+      }
+    }
+    if (!options.hasExplicitFill && 'fills' in node) {
+      const geo = node as GeometryMixin;
+      const existingFills = Array.isArray(geo.fills) ? geo.fills : [];
+      if (options.isCreate || existingFills.length === 0) {
+        geo.fills = [
+          {
+            type: 'SOLID',
+            color: { r: 0.58, g: 0.64, b: 0.72 },
+            opacity: 0.08,
+          },
+        ];
+      }
+    }
+  } else {
+    if ('dashPattern' in node) {
+      (node as GeometryMixin).dashPattern = [];
+    }
+    if (wasPlaceholder && !options.hasExplicitStroke && 'strokes' in node) {
+      (node as GeometryMixin).strokes = [];
+    }
+  }
 }
 
 async function createNodeFromParams(
@@ -455,6 +528,13 @@ async function createNodeFromParams(
           frame.counterAxisAlignItems = params.counterAxisAlignItems as FrameNode['counterAxisAlignItems'];
         }
       }
+    }
+    if (typeof params.placeholder === 'boolean') {
+      applyPlaceholderState(frame, params.placeholder, {
+        hasExplicitFill: typeof params.fillHex === 'string',
+        hasExplicitStroke: typeof params.strokeHex === 'string',
+        isCreate: true,
+      });
     }
     created = frame;
   } else if (upper === 'TEXT') {
@@ -736,6 +816,14 @@ handlers.set('create_frame', async (params) => {
     }
   }
 
+  if (typeof params.placeholder === 'boolean') {
+    applyPlaceholderState(frame, params.placeholder, {
+      hasExplicitFill: typeof params.fillHex === 'string',
+      hasExplicitStroke: typeof params.strokeHex === 'string',
+      isCreate: true,
+    });
+  }
+
   parent.appendChild(frame);
   return serializeNode(frame, 1);
 });
@@ -906,6 +994,13 @@ handlers.set('update_node', async (params) => {
   if (typeof params.layoutSizingVertical === 'string' && 'layoutSizingVertical' in node) {
     (node as FrameNode).layoutSizingVertical = params.layoutSizingVertical as FrameNode['layoutSizingVertical'];
   }
+  if (typeof params.placeholder === 'boolean') {
+    applyPlaceholderState(node, params.placeholder, {
+      hasExplicitFill: typeof params.fillHex === 'string',
+      hasExplicitStroke: typeof params.strokeHex === 'string',
+      isCreate: false,
+    });
+  }
 
   return serializeNode(node, 1);
 });
@@ -973,16 +1068,201 @@ handlers.set('export_image', async (params) => {
   };
 });
 
+const FIGMA_NODE_CREATOR_METHODS = new Set<string>([
+  'createFrame',
+  'createText',
+  'createRectangle',
+  'createEllipse',
+  'createPolygon',
+  'createStar',
+  'createLine',
+  'createVector',
+  'createBooleanOperation',
+  'createComponent',
+  'createComponentFromNode',
+  'createSlice',
+  'createSection',
+  'createPage',
+  'createNodeFromSvg',
+  'createSticky',
+  'createConnector',
+  'createShapeWithText',
+  'createCodeBlock',
+  'createTable',
+  'createWidget',
+  'createSlide',
+  'createSlideRow',
+  'group',
+  'union',
+  'subtract',
+  'intersect',
+  'exclude',
+  'flatten',
+  'combineAsVariants',
+]);
+
+const FIGMA_MUTATING_METHODS = new Set<string>([
+  'createPaintStyle',
+  'createTextStyle',
+  'createEffectStyle',
+  'createGridStyle',
+  'createImage',
+  'createImageAsync',
+  'importComponentByKeyAsync',
+  'importComponentSetByKeyAsync',
+  'importStyleByKeyAsync',
+  'commitUndo',
+  'triggerUndo',
+]);
+
+const FIGMA_VARIABLE_MUTATING_METHODS = new Set<string>([
+  'createVariableCollection',
+  'createVariable',
+  'importVariableByKeyAsync',
+]);
+
+function captureCanvasSnapshot(): CanvasSnapshot {
+  const nodes: Record<string, CanvasNodeFingerprint> = {};
+  const maxNodes = 5000;
+  let count = 0;
+
+  function walk(node: BaseNode, parentId: string | null): void {
+    if (count >= maxNodes) return;
+    count++;
+
+    const childIds = 'children' in node ? node.children.map((c) => c.id) : [];
+    const fp: CanvasNodeFingerprint = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      parentId,
+      childIds,
+    };
+    if ('x' in node) fp.x = node.x;
+    if ('y' in node) fp.y = node.y;
+    if ('width' in node) fp.width = node.width;
+    if ('height' in node) fp.height = node.height;
+    if ('visible' in node) fp.visible = node.visible;
+    if (node.type === 'TEXT') fp.characters = node.characters;
+    if ('fills' in node && Array.isArray(node.fills)) fp.fillsCount = node.fills.length;
+    if ('strokes' in node && Array.isArray(node.strokes)) fp.strokesCount = node.strokes.length;
+
+    nodes[node.id] = fp;
+
+    if ('children' in node) {
+      for (const child of node.children) {
+        walk(child, node.id);
+        if (count >= maxNodes) break;
+      }
+    }
+  }
+
+  walk(figma.currentPage, null);
+
+  return {
+    currentPageId: figma.currentPage.id,
+    pageIds: figma.root.children.map((p) => p.id),
+    nodes,
+  };
+}
+
+function createTrackedFigmaProxy(
+  tracker: { mutated: boolean; createdNodeIds: Set<string> },
+): PluginAPI {
+  const variablesProxy = new Proxy(figma.variables, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && typeof value === 'function') {
+        return (...args: unknown[]) => {
+          if (FIGMA_VARIABLE_MUTATING_METHODS.has(prop)) {
+            tracker.mutated = true;
+          }
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      }
+      return value;
+    },
+  });
+
+  return new Proxy(figma, {
+    get(target, prop, receiver) {
+      if (prop === 'variables') {
+        return variablesProxy;
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop === 'string' && typeof value === 'function') {
+        return (...args: unknown[]) => {
+          const isCreator = FIGMA_NODE_CREATOR_METHODS.has(prop);
+          const isMutator = isCreator || FIGMA_MUTATING_METHODS.has(prop);
+          const res = (value as (...a: unknown[]) => unknown).apply(target, args);
+          if (isMutator) {
+            tracker.mutated = true;
+          }
+          if (isCreator && res && typeof res === 'object' && 'id' in res) {
+            const id = (res as { id?: unknown }).id;
+            if (typeof id === 'string') {
+              tracker.createdNodeIds.add(id);
+            }
+          }
+          return res;
+        };
+      }
+      return value;
+    },
+  });
+}
+
 handlers.set('execute_figma_js', async (params) => {
   const code = String(params.code ?? '');
   const scriptParams =
     params.params && typeof params.params === 'object' ? params.params : {};
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-    ...args: string[]
-  ) => (figmaApi: PluginAPI, p: unknown) => Promise<unknown>;
-  const fn = new AsyncFunction('figma', 'params', code);
-  const result = await fn(figma, scriptParams);
-  return result === undefined ? { ok: true } : result;
+  const startTime = Date.now();
+  const beforeSnapshot = captureCanvasSnapshot();
+  const tracker = {
+    mutated: false,
+    createdNodeIds: new Set<string>(),
+  };
+
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
+      ...args: string[]
+    ) => (figmaApi: PluginAPI, p: unknown) => Promise<unknown>;
+    const fn = new AsyncFunction('figma', 'params', code);
+    const trackedFigma = createTrackedFigmaProxy(tracker);
+    const result = await fn(trackedFigma, scriptParams);
+    const elapsedMs = Date.now() - startTime;
+    const warning = evaluateExecuteJsTimeoutWarning(
+      elapsedMs,
+      EXECUTE_JS_TIMEOUT_MS,
+      EXECUTE_JS_SOFT_WARN_MS,
+    );
+
+    if (result === undefined) {
+      return warning ? { ok: true, warning } : { ok: true };
+    }
+    if (warning && result && typeof result === 'object' && !Array.isArray(result)) {
+      const rec = result as Record<string, unknown>;
+      return rec.warning ? rec : { ...rec, warning };
+    }
+    return result;
+  } catch (err) {
+    let afterSnapshot: CanvasSnapshot | null = null;
+    try {
+      afterSnapshot = captureCanvasSnapshot();
+    } catch {
+      afterSnapshot = null;
+    }
+    return classifyExecuteJsFailure({
+      error: err,
+      beforeSnapshot,
+      afterSnapshot,
+      trackedCreatedIds: tracker.createdNodeIds,
+      trackedMutated: tracker.mutated,
+      elapsedMs: Date.now() - startTime,
+      timeoutMs: EXECUTE_JS_TIMEOUT_MS,
+      softWarnMs: EXECUTE_JS_SOFT_WARN_MS,
+    });
+  }
 });
 
 handlers.set('get_design_context', async (params) => {
@@ -1368,6 +1648,304 @@ handlers.set('batch_create', async (params) => {
 
   const nodes = await buildTree(specs, rootParent);
   return { createdCount, nodes };
+});
+
+function extractComponentProperties(
+  node: ComponentNode | ComponentSetNode,
+): DesignSystemComponentProperty[] {
+  const properties: DesignSystemComponentProperty[] = [];
+  try {
+    const defs = node.componentPropertyDefinitions;
+    if (!defs) return properties;
+    for (const [name, def] of Object.entries(defs)) {
+      const entry: DesignSystemComponentProperty = {
+        name,
+        type: def.type,
+        defaultValue: def.defaultValue,
+      };
+      if (def.type === 'VARIANT' && Array.isArray(def.variantOptions)) {
+        entry.variantOptions = def.variantOptions;
+      }
+      properties.push(entry);
+    }
+  } catch {
+    // Variant children or malformed component definitions can throw when accessed
+  }
+  return properties;
+}
+
+handlers.set('search_design_system', async (params) => {
+  const query = typeof params.query === 'string' ? params.query : undefined;
+  const includeComponents = params.includeComponents !== false;
+  const includeStyles = params.includeStyles !== false;
+  const includeVariables = params.includeVariables !== false;
+  const limit = typeof params.limit === 'number' ? params.limit : 50;
+
+  const components: DesignSystemComponentItem[] = [];
+  if (includeComponents) {
+    await figma.loadAllPagesAsync();
+    const walkComponents = (node: BaseNode): void => {
+      if (node.type === 'COMPONENT_SET') {
+        components.push({
+          id: node.id,
+          key: node.key,
+          name: node.name,
+          type: 'COMPONENT_SET',
+          description: node.description ?? '',
+          properties: extractComponentProperties(node),
+        });
+        return;
+      }
+      if (node.type === 'COMPONENT') {
+        if (!node.parent || node.parent.type !== 'COMPONENT_SET') {
+          components.push({
+            id: node.id,
+            key: node.key,
+            name: node.name,
+            type: 'COMPONENT',
+            description: node.description ?? '',
+            properties: extractComponentProperties(node),
+          });
+        }
+        return;
+      }
+      if ('children' in node) {
+        for (const child of node.children) {
+          walkComponents(child);
+        }
+      }
+    };
+    for (const page of figma.root.children) {
+      walkComponents(page);
+    }
+  }
+
+  let textStyles: Array<{ id: string; key: string; name: string }> = [];
+  let paintStyles: Array<{ id: string; key: string; name: string }> = [];
+  let effectStyles: Array<{ id: string; key: string; name: string }> = [];
+  if (includeStyles) {
+    const [texts, paints, effects] = await Promise.all([
+      figma.getLocalTextStylesAsync(),
+      figma.getLocalPaintStylesAsync(),
+      figma.getLocalEffectStylesAsync(),
+    ]);
+    textStyles = texts.map((s) => ({ id: s.id, key: s.key, name: s.name }));
+    paintStyles = paints.map((s) => ({ id: s.id, key: s.key, name: s.name }));
+    effectStyles = effects.map((s) => ({ id: s.id, key: s.key, name: s.name }));
+  }
+
+  let localCollections: Array<{
+    id: string;
+    name: string;
+    modes: Array<{ modeId: string; name: string }>;
+    variableCount: number;
+  }> = [];
+  let localVariables: Array<{
+    id: string;
+    name: string;
+    resolvedType: string;
+    collectionId: string;
+    collectionName: string;
+  }> = [];
+  const libraryCollections: DesignSystemLibraryCollectionItem[] = [];
+  const libraryVariables: DesignSystemLibraryVariableItem[] = [];
+  let libraryUnavailableReason: string | undefined;
+
+  if (includeVariables) {
+    const [collections, variables] = await Promise.all([
+      figma.variables.getLocalVariableCollectionsAsync(),
+      figma.variables.getLocalVariablesAsync(),
+    ]);
+    const collectionNameById = new Map<string, string>();
+    localCollections = collections.map((c) => {
+      collectionNameById.set(c.id, c.name);
+      return {
+        id: c.id,
+        name: c.name,
+        modes: c.modes.map((m) => ({ modeId: m.modeId, name: m.name })),
+        variableCount: c.variableIds.length,
+      };
+    });
+    localVariables = variables.map((v) => ({
+      id: v.id,
+      name: v.name,
+      resolvedType: v.resolvedType,
+      collectionId: v.variableCollectionId,
+      collectionName: collectionNameById.get(v.variableCollectionId) ?? '',
+    }));
+
+    if (
+      figma.teamLibrary &&
+      typeof figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync === 'function'
+    ) {
+      try {
+        const availCollections =
+          await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+        for (const col of availCollections) {
+          libraryCollections.push({
+            key: col.key,
+            name: col.name,
+            libraryName: col.libraryName,
+          });
+          try {
+            const vars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+            for (const v of vars) {
+              libraryVariables.push({
+                key: v.key,
+                name: v.name,
+                resolvedType: v.resolvedType,
+                collectionKey: col.key,
+                collectionName: col.name,
+                libraryName: col.libraryName,
+              });
+            }
+          } catch {
+            // Skip individual inaccessible library collection
+          }
+        }
+      } catch (err) {
+        libraryUnavailableReason =
+          err instanceof Error ? err.message : 'Team Library variables unavailable';
+      }
+    } else {
+      libraryUnavailableReason = 'Team Library API unavailable in this Figma environment';
+    }
+  }
+
+  const raw: RawDesignSystemInventory = {
+    components,
+    styles: { textStyles, paintStyles, effectStyles },
+    localVariables: { collections: localCollections, variables: localVariables },
+    libraryVariables: {
+      collections: libraryCollections,
+      variables: libraryVariables,
+      ...(libraryUnavailableReason ? { unavailableReason: libraryUnavailableReason } : {}),
+    },
+  };
+
+  return filterDesignSystemInventory(raw, {
+    query,
+    includeComponents,
+    includeStyles,
+    includeVariables,
+    limit,
+  });
+});
+
+function snapshotNodeForAudit(node: BaseNode): AuditNodeSnapshot {
+  const visible = 'visible' in node ? Boolean(node.visible) : true;
+  const width = 'width' in node && typeof node.width === 'number' ? node.width : 0;
+  const height = 'height' in node && typeof node.height === 'number' ? node.height : 0;
+
+  let bounds: { x: number; y: number; width: number; height: number } | null = null;
+  if ('absoluteBoundingBox' in node && node.absoluteBoundingBox) {
+    const bb = node.absoluteBoundingBox;
+    bounds = { x: bb.x, y: bb.y, width: bb.width, height: bb.height };
+  } else if ('x' in node && 'y' in node) {
+    bounds = { x: node.x, y: node.y, width, height };
+  }
+
+  const clipsContent =
+    'clipsContent' in node ? Boolean((node as FrameNode).clipsContent) : false;
+
+  let hasImageFill = false;
+  let hasHardcodedSolidFill = false;
+  if ('fills' in node && Array.isArray(node.fills)) {
+    const visibleFills = (node.fills as Paint[]).filter((p) => p.visible !== false);
+    hasImageFill = visibleFills.some((p) => p.type === 'IMAGE');
+
+    const solidFills = visibleFills.filter((p): p is SolidPaint => p.type === 'SOLID');
+    if (solidFills.length > 0) {
+      const fillStyleId =
+        'fillStyleId' in node && typeof node.fillStyleId === 'string'
+          ? node.fillStyleId
+          : '';
+      const nodeBoundFills =
+        'boundVariables' in node &&
+        node.boundVariables &&
+        'fills' in node.boundVariables &&
+        Boolean((node.boundVariables as Record<string, unknown>).fills);
+      const anyPaintBound = solidFills.some(
+        (p) => Boolean(p.boundVariables && p.boundVariables.color),
+      );
+      if (!fillStyleId && !nodeBoundFills && !anyPaintBound) {
+        hasHardcodedSolidFill = true;
+      }
+    }
+  }
+
+  let hasHardcodedTextStyle = false;
+  let textTruncation: string | undefined;
+  let textAutoResize: string | undefined;
+  let fonts: Array<{ family: string; style: string }> | undefined;
+
+  if (node.type === 'TEXT') {
+    const textStyleId = typeof node.textStyleId === 'string' ? node.textStyleId : '';
+    if (!textStyleId) {
+      hasHardcodedTextStyle = true;
+    }
+    if ('textTruncation' in node) {
+      textTruncation = String(node.textTruncation);
+    }
+    textAutoResize = String(node.textAutoResize);
+
+    if (node.fontName !== figma.mixed && typeof node.fontName === 'object') {
+      fonts = [{ family: node.fontName.family, style: node.fontName.style }];
+    } else if (node.characters.length > 0) {
+      try {
+        const rangeFonts = node.getRangeAllFontNames(0, node.characters.length);
+        fonts = rangeFonts.map((f) => ({ family: f.family, style: f.style }));
+      } catch {
+        fonts = [];
+      }
+    }
+  }
+
+  const isPlaceholder =
+    'getPluginData' in node && node.getPluginData(PLACEHOLDER_PLUGIN_DATA_KEY) === 'true';
+
+  const children =
+    'children' in node ? node.children.map((child) => snapshotNodeForAudit(child)) : undefined;
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    visible,
+    width,
+    height,
+    bounds,
+    clipsContent,
+    hasImageFill,
+    hasHardcodedSolidFill,
+    hasHardcodedTextStyle,
+    textTruncation,
+    textAutoResize,
+    fonts,
+    isPlaceholder,
+    children,
+  };
+}
+
+handlers.set('audit_frame', async (params) => {
+  const nodeId = String(params.nodeId ?? '');
+  if (!nodeId) throw new Error('nodeId is required');
+
+  const target = await figma.getNodeByIdAsync(nodeId);
+  if (!target) throw new Error(`Node "${nodeId}" not found`);
+
+  const [localVars, paintStyles, textStyles] = await Promise.all([
+    figma.variables.getLocalVariablesAsync(),
+    figma.getLocalPaintStylesAsync(),
+    figma.getLocalTextStylesAsync(),
+  ]);
+
+  const rootSnapshot = snapshotNodeForAudit(target);
+  return analyzeAuditTree(rootSnapshot, {
+    hasLocalVariables: localVars.length > 0,
+    hasLocalPaintStyles: paintStyles.length > 0,
+    hasLocalTextStyles: textStyles.length > 0,
+  });
 });
 
 // ─── UI Bridge ───
